@@ -5,12 +5,10 @@ const InvestmentPlan = require('../models/InvestmentPlan');
 const fetch = require('node-fetch');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const { generateAndSendReceipt } = require('./memberPaymentRoutes');
-const { generateNextUserId } = require('./memberPaymentRoutes');
+const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes'); // Fixed import
 const { calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 const payRegister = async (req, res) => {
-  // Unchanged from previous implementation
   try {
     const userMongoId = req.user?._id;
     if (!userMongoId) return res.status(401).json({ error: 'Unauthorized' });
@@ -177,7 +175,7 @@ const payInvestment = async (req, res) => {
       planId,
       amount,
       nextPayoutDate: calculateNextPayoutDate(),
-      totalPayouts: plan.durationMonths, // Monthly payouts = duration in months
+      totalPayouts: plan.durationMonths,
       status: 'pending'
     });
 
