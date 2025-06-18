@@ -44,6 +44,15 @@ const UserSchema = new mongoose.Schema({
   street: {
     type: String
   },
+  resetToken: {
+  type: String,
+  default: null
+},
+resetTokenExpiry: {
+  type: Date,
+  default: null
+},
+
   unit: {
     type: String
   },

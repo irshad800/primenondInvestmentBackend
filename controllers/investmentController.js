@@ -42,4 +42,47 @@ const getUserReturns = async (req, res) => {
   }
 };
 
-module.exports = { getPlans, getUserInvestments, getUserReturns };
+
+const createInvestmentPlan = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ Success: false, Message: 'Only admin can add plans' });
+    }
+
+    const {
+      name,
+      description,
+      minAmount,
+      maxAmount,
+      returnRate,
+      annualReturnRate,
+      durationMonths,
+      payoutOption,
+      security,
+      benefits
+    } = req.body;
+
+    const newPlan = new InvestmentPlan({
+      name,
+      description,
+      minAmount,
+      maxAmount,
+      returnRate,
+      annualReturnRate,
+      durationMonths,
+      payoutOption,
+      security,
+      benefits
+    });
+
+    await newPlan.save();
+    res.status(201).json({ Success: true, Message: 'Plan created successfully', plan: newPlan });
+  } catch (error) {
+    console.error('❌ Create Plan Error:', error);
+    res.status(500).json({ Success: false, Message: 'Internal Server Error', error: error.message });
+  }
+};
+
+
+
+module.exports = { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan };

@@ -1,8 +1,8 @@
 const authDB = require('../models/auth_schema');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { sendVerificationEmail } = require('../utils/emailService');
-const { generateVerificationToken } = require('../utils/emailService');
+const crypto = require('crypto');
+const { sendVerificationEmail, generateVerificationToken, sendPasswordResetEmail } = require('../utils/emailService');
 const cloudinary = require('../config/cloudinary');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
@@ -15,12 +15,10 @@ const register = async (req, res) => {
       country, street, unit, city, state, postalCode
     } = req.body;
 
-    // Validate required fields
     if (!username || !password || !name || !email) {
       return res.status(400).json({ Success: false, Message: 'Missing required fields' });
     }
 
-    // Check for existing user
     const query = { $or: [{ username }, { email }] };
     if (phone) query.$or.push({ phone });
 
@@ -34,24 +32,21 @@ const register = async (req, res) => {
       });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Upload passport to Cloudinary (if present)
     let passportCopy = null;
+
     if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: 'primebond/passports',
-        type: 'private',
-        resource_type: 'auto'
-      });
+    const result = await cloudinary.uploader.upload(req.file.path, {
+  folder: 'primebond/passports',
+  type: 'authenticated', // ✅ makes file private
+  resource_type: 'auto'
+});
+
       passportCopy = result.public_id;
     }
 
-    // Generate verification token
     const verificationToken = generateVerificationToken();
 
-    // Create and save user
     const newUser = new authDB({
       username,
       password: hashedPassword,
@@ -74,8 +69,6 @@ const register = async (req, res) => {
     });
 
     await newUser.save();
-
-    // Send verification email
     await sendVerificationEmail(email.trim().toLowerCase(), verificationToken);
 
     return res.json({
@@ -83,12 +76,101 @@ const register = async (req, res) => {
       Message: 'Registration successful. Please verify your email.'
     });
   } catch (error) {
-    console.error(`❌ Registration Error: ${error.stack}`);
+    console.error('❌ FULL ERROR:', error);
     return res.status(500).json({
       Success: false,
       Message: 'Internal Server Error',
-      Error: error.message
+      Error: error?.message || 'Unknown error occurred'
     });
+  }
+};
+
+const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ Success: false, Message: 'Email and password are required' });
+    }
+
+    const user = await authDB.findOne({ email: email.trim().toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ Success: false, Message: 'Invalid credentials' });
+    }
+
+    if (!user.verified) {
+      return res.status(403).json({ Success: false, Message: 'Please verify your email first' });
+    }
+
+    const token = jwt.sign(
+      { _id: user._id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({
+      Success: true,
+      Message: 'Login successful',
+      Token: token,
+      paymentStatus: user.paymentStatus || 'unpaid'
+    });
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    res.status(500).json({ Success: false, Message: 'Internal Server Error', Error: error.message });
+  }
+};
+
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+const googleLogin = async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) return res.status(400).json({ Success: false, Message: 'Google token missing' });
+
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+
+    const payload = ticket.getPayload();
+    const { email, name, sub } = payload;
+
+    let user = await authDB.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      user = new authDB({
+        username: email.split('@')[0],
+        password: await bcrypt.hash(sub, 12),
+        name,
+        email: email.toLowerCase(),
+        verified: true,
+        paymentStatus: 'unpaid'
+      });
+      await user.save();
+    }
+
+    const jwtToken = jwt.sign(
+      { _id: user._id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({
+      Success: true,
+      Message: 'Google login successful',
+      Token: jwtToken,
+      paymentStatus: user.paymentStatus || 'unpaid'
+    });
+  } catch (error) {
+    console.error('❌ Google Login error:', error.message);
+    res.status(500).json({ Success: false, Message: 'Google login failed', Error: error.message });
   }
 };
 
@@ -96,32 +178,22 @@ const verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
 
-    // Find user by verification token
     const user = await authDB.findOne({ verificationToken: token });
 
     if (!user) {
-      console.log('Email verification failed: Invalid or expired token');
-      return res.status(400).json({
-        Success: false,
-        Message: 'Invalid or expired token'
-      });
+      return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
     }
 
-    // Update user as verified
     user.verified = true;
     user.verificationToken = '';
     await user.save();
 
-    // Generate JWT token
     const authToken = jwt.sign(
       { _id: user._id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
 
-    console.log('✅ Email verified successfully for user:', user.username);
-
-    // Redirect to front-end with token
     return res.redirect(`${process.env.BASE_URL}/verify-email.html?token=${authToken}`);
   } catch (error) {
     console.error('❌ Error in verify-email route:', error.message);
@@ -133,4 +205,96 @@ const verifyEmail = async (req, res) => {
   }
 };
 
-module.exports = { register, verifyEmail };
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ Success: false, Message: 'Email is required' });
+
+    const user = await authDB.findOne({ email: email.toLowerCase().trim() });
+    if (!user) return res.status(404).json({ Success: false, Message: 'User not found' });
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expiry = Date.now() + 1000 * 60 * 15;
+
+    user.resetToken = resetToken;
+    user.resetTokenExpiry = expiry;
+    await user.save();
+
+    await sendPasswordResetEmail(user.email, resetToken);
+
+    return res.json({ Success: true, Message: 'Reset link sent to email' });
+  } catch (error) {
+    console.error('❌ Forgot password error:', error);
+    return res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    const user = await authDB.findOne({
+      resetToken: token,
+      resetTokenExpiry: { $gt: Date.now() }
+    });
+
+    if (!user) return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    user.resetToken = null;
+    user.resetTokenExpiry = null;
+    await user.save();
+
+    return res.json({ Success: true, Message: 'Password reset successful' });
+  } catch (error) {
+    console.error('❌ Reset password error:', error);
+    return res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+  }
+};
+
+
+
+const getProfile = async (req, res) => {
+  try {
+    const user = await authDB.findById(req.user._id).select('-password -verificationToken -resetToken -resetTokenExpiry');
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
+    }
+
+    return res.json({ Success: true, User: user });
+  } catch (error) {
+    console.error('❌ Get profile error:', error);
+    return res.status(500).json({ Success: false, Message: 'Failed to fetch user profile' });
+  }
+};
+
+const updateProfile = async (req, res) => {
+  try {
+    const updates = req.body;
+    delete updates.password; // Don't allow password update here
+
+    const updatedUser = await authDB.findByIdAndUpdate(req.user._id, updates, {
+      new: true,
+      runValidators: true
+    });
+
+    return res.json({ Success: true, Message: 'Profile updated successfully', User: updatedUser });
+  } catch (error) {
+    console.error('❌ Update profile error:', error);
+    return res.status(500).json({ Success: false, Message: 'Profile update failed', Error: error.message });
+  }
+};
+
+
+
+module.exports = {
+  register,
+  verifyEmail,
+  login,
+  googleLogin,
+  forgotPassword,
+  resetPassword,
+  getProfile,
+  updateProfile
+};
+

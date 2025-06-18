@@ -4,7 +4,7 @@ const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
 const fetch = require('node-fetch');
 const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = Stripe(process.env.STRIPE_SECRET);
 const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes'); // Fixed import
 const { calculateNextPayoutDate } = require('../utils/calculateReturn');
 
@@ -17,7 +17,7 @@ const payRegister = async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const fixedAmount = 50.0;
-    const method = req.body.method || 'walletcrypto';
+const method = req.body.method || req.body.payment_method || 'walletcrypto';
     const paymentCurrency = req.body.currency || 'usdttrc20';
 
     if (method === 'bank') {
