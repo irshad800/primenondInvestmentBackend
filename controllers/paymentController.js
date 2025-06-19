@@ -16,6 +16,17 @@ const payRegister = async (req, res) => {
     const user = await authDB.findById(userMongoId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+
+   // ✅ Prevent re-payment if already paid
+    if (user.paymentStatus === 'success') {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already completed your registration payment.'
+      });
+    }
+
+
+
     const fixedAmount = 50.0;
 const method = req.body.method || req.body.payment_method || 'walletcrypto';
     const paymentCurrency = req.body.currency || 'usdttrc20';
