@@ -177,8 +177,10 @@ const googleLogin = async (req, res) => {
 const verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
+    console.log('Received verification token:', token);
 
     const user = await authDB.findOne({ verificationToken: token });
+    console.log('User found:', user ? user.email : 'No user found');
 
     if (!user) {
       return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
@@ -186,7 +188,9 @@ const verifyEmail = async (req, res) => {
 
     user.verified = true;
     user.verificationToken = '';
+    console.log('Updating user:', { email: user.email, verified: true });
     await user.save();
+    console.log('User saved successfully');
 
     const authToken = jwt.sign(
       { _id: user._id, email: user.email },
@@ -194,7 +198,9 @@ const verifyEmail = async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    return res.redirect(`${process.env.BASE_URL}/verify-email.html?token=${authToken}`);
+    const redirectUrl = `http://127.0.0.1:5500/reset-password.html?token=${authToken}`;
+    console.log('Redirecting to:', redirectUrl);
+    return res.redirect(redirectUrl);
   } catch (error) {
     console.error('❌ Error in verify-email route:', error.message);
     return res.status(500).json({

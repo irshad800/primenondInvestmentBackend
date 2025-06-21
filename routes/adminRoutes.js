@@ -3,8 +3,9 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 dotenv.config();
+const { confirmPayment } = require('../controllers/adminController');
 
-// Simple login handler using .env-stored credentials
+// Admin login
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -27,7 +28,6 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ success: false, message: 'Invalid admin credentials' });
   }
 
-  // Create token with admin role
   const token = jwt.sign({ username, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1d' });
 
   res.status(200).json({
@@ -36,5 +36,8 @@ router.post('/login', (req, res) => {
     token
   });
 });
+
+// Confirm payment (registration or investment)
+router.post('/confirm-payment', confirmPayment);
 
 module.exports = router;

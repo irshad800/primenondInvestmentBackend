@@ -1,9 +1,7 @@
 const express = require('express');
 const router = express.Router();
-
-const Stripe = require('stripe'); // ✅ <-- this was missing
-const stripe = Stripe(process.env.STRIPE_SECRET); // ✅ now it works
-
+const Stripe = require('stripe');
+const stripe = Stripe(process.env.STRIPE_SECRET);
 const { payRegister, payInvestment, callback } = require('../controllers/paymentController');
 const { ensureAuth } = require('../middleware/authMiddleware');
 const PDFDocument = require('pdfkit');
@@ -12,6 +10,8 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
+const Investment = require('../models/Investment');
+const InvestmentPlan = require('../models/InvestmentPlan');
 
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
@@ -42,7 +42,6 @@ async function generateAndSendReceipt(data, userEmail, userName, userInfo = {}) 
     const writeStream = fs.createWriteStream(filePath);
     doc.pipe(writeStream);
 
-
     const logoPath = path.join(__dirname, '../assets/images/Wish.JPG');
     const paidSealPath = path.join(__dirname, '../assets/images/paid_seal.png');
     const themeColor = "#3b4a39";
@@ -52,7 +51,6 @@ async function generateAndSendReceipt(data, userEmail, userName, userInfo = {}) 
     const tableWidth = 480;
     const rowHeight = 20;
 
-    // --- HEADER ---
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, 55, 40, { width: 80 });
     }
@@ -194,7 +192,7 @@ async function generateAndSendReceipt(data, userEmail, userName, userInfo = {}) 
       ]
     });
 
-    fs.unlinkSync(filePath); // Clean up
+    fs.unlinkSync(filePath);
     console.log("📧 Receipt sent to:", userEmail);
   } catch (error) {
     console.error('❌ Receipt Generation Error:', error);
@@ -202,30 +200,24 @@ async function generateAndSendReceipt(data, userEmail, userName, userInfo = {}) 
   }
 }
 
-
-
-
-// Stripe Webhook Handler
 router.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
 
   let event;
   try {
-event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('❌ Stripe Webhook Error:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   if (event.type === 'checkout.session.completed') {
-  const session = await stripe.checkout.sessions.retrieve(event.data.object.id, {
-  expand: ['payment_intent']
-});
+    const session = await stripe.checkout.sessions.retrieve(event.data.object.id, {
+      expand: ['payment_intent']
+    });
 
-const paymentIntentId = session.payment_intent.id;
-console.log("💳 Stripe PaymentIntent ID:", paymentIntentId);
-
+    const paymentIntentId = session.payment_intent.id;
+    console.log("💳 Stripe PaymentIntent ID:", paymentIntentId);
 
     const payment = await MemberPayment.findOneAndUpdate(
       { payment_reference: session.id },
@@ -235,25 +227,36 @@ console.log("💳 Stripe PaymentIntent ID:", paymentIntentId);
 
     if (payment) {
       const user = await authDB.findById(payment.userId);
-   if (user) {
-  if (!user.userId) {
-    user.userId = await generateNextUserId();
-  }
+      if (user) {
+        if (!user.userId) {
+          user.userId = await generateNextUserId();
+        }
 
-  user.paymentStatus = 'success';
-  user.paymentMethod = 'card';
-  user.transactionId = session.id;
-  user.lastPaymentLink = session.url || null;
-  user.cryptoCoin = null; // Not applicable for card payments
+        user.paymentStatus = 'success';
+        user.paymentMethod = 'card';
+        user.transactionId = session.id;
+        user.lastPaymentLink = session.url || null;
+        user.cryptoCoin = null;
+        await user.save();
 
-  await user.save();
+        if (payment.investmentId) {
+          const investment = await Investment.findById(payment.investmentId);
+          if (investment) {
+            investment.status = 'active';
+            await investment.save();
+          }
+        }
+
+        const orderDescription = payment.investmentId
+          ? `Prime Bond ${(await InvestmentPlan.findById((await Investment.findById(payment.investmentId)).planId)).name} Investment`
+          : 'Prime Bond Registration';
 
         await generateAndSendReceipt({
           payment_id: session.id,
           updated_at: new Date().toISOString(),
           price_amount: session.amount_total / 100,
           pay_currency: session.currency,
-          order_description: 'Prime Bond Registration',
+          order_description: orderDescription,
           payment_status: 'success',
           payment_method: 'CARD'
         }, user.email, user.name, {
@@ -271,7 +274,6 @@ console.log("💳 Stripe PaymentIntent ID:", paymentIntentId);
   res.status(200).json({ received: true });
 });
 
-
 router.get('/test-receipt', async (req, res) => {
   try {
     const fakePaymentData = {
@@ -284,7 +286,7 @@ router.get('/test-receipt', async (req, res) => {
       payment_method: 'CARD'
     };
 
-    const testUserEmail = 'irshadvp800@gmail.com'; // 🔁 Change this to your own test email
+    const testUserEmail = 'irshadvp800@gmail.com';
     const testUserName = 'Test User';
 
     const fakeUserDetails = {
@@ -305,14 +307,8 @@ router.get('/test-receipt', async (req, res) => {
   }
 });
 
-
-// Pay registration fee ($50)
 router.post('/register', ensureAuth, payRegister);
-
-// Pay investment amount
 router.post('/investment', ensureAuth, payInvestment);
-
-// Payment callback (NOWPayments)
 router.post('/callback', callback);
 
 module.exports = {
