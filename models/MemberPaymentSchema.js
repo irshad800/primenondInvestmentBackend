@@ -11,6 +11,11 @@ const MemberPaymentSchema = new mongoose.Schema({
     ref: 'auth',
     required: true
   },
+  investmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Investment',
+    default: null
+  },
   amount: {
     type: Number,
     required: true
@@ -22,7 +27,7 @@ const MemberPaymentSchema = new mongoose.Schema({
   customer: {
     name: { type: String, required: true },
     email: { type: String, required: true },
-    phone: { type: String }
+    phone: { type: String, default: 'N/A' }
   },
   status: {
     type: String,
@@ -31,8 +36,12 @@ const MemberPaymentSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['bank', 'card', 'walletcrypto'],
+    enum: ['bank', 'cash', 'card', 'walletcrypto'],
     required: true
+  },
+  paymentUrl: {
+    type: String,
+    default: null // Added as per previous fix
   },
   createdAt: {
     type: Date,

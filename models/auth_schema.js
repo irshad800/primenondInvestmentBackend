@@ -80,7 +80,7 @@ resetTokenExpiry: {
   },
   paymentMethod: {
     type: String,
-    enum: ['bank', 'card', 'walletcrypto', null],
+    enum: ['bank','cash', 'card', 'walletcrypto', null],
     default: null
   },
   transactionId: {
@@ -89,7 +89,7 @@ resetTokenExpiry: {
   },
   lastPaymentLink: {
     type: String,
-    default: null
+    default: null    
   },
   cryptoCoin: {
     type: String,

@@ -6,11 +6,14 @@ const InvestmentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   startDate: { type: Date, default: Date.now },
   nextPayoutDate: { type: Date, required: true },
-  totalPayouts: { type: Number, required: true }, // Number of monthly payouts
+  totalPayouts: { type: Number, required: true },
   payoutsMade: { type: Number, default: 0 },
-  status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  status: {
+    type: String,
+    enum: ['pending', 'active', 'completed', 'cancelled'], // ✅ fixed
+    default: 'pending'
+  },
+  createdAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model('Investment', InvestmentSchema);
