@@ -44,7 +44,7 @@ const generateVerificationToken = () => crypto.randomBytes(20).toString('hex');
 
 // Send verification email
 const sendVerificationEmail = async (email, token) => {
-  const verificationUrl = `${process.env.BASE_URL}/api/verify-email/${token}`;
+  const verificationUrl = `http://localhost:5000/api/auth/verify-email/${token}`;
 
   const mailOptions = {
     from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
