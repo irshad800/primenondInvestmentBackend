@@ -174,11 +174,81 @@ const googleLogin = async (req, res) => {
   }
 };
 
+//google - register
+
+
+const googleRegister = async (req, res) => {
+  try {
+    const {
+      username, name, email, phone,
+      passportNumber, alternateContact, dob,
+      country, street, unit, city, state, postalCode
+    } = req.body;
+
+    if (!username || !name || !email) {
+      return res.status(400).json({ Success: false, Message: 'Missing required fields' });
+    }
+
+    const query = { $or: [{ username }, { email }] };
+    if (phone) query.$or.push({ phone });
+
+    const existingUser = await authDB.findOne(query);
+    if (existingUser) {
+      return res.status(400).json({
+        Success: false,
+        Message: existingUser.email === email ? 'Email already in use' :
+                existingUser.username === username ? 'Username already taken' :
+                'Phone number already in use'
+      });
+    }
+
+    const user = new authDB({
+      username,
+      password: await bcrypt.hash(crypto.randomBytes(10).toString('hex'), 12), // random
+      name,
+      email: email.toLowerCase(),
+      phone: phone || null,
+      passportNumber: passportNumber || null,
+      alternateContact: alternateContact || null,
+      dob: dob ? new Date(dob) : null,
+      country: country || null,
+      street: street || null,
+      unit: unit || null,
+      city: city || null,
+      state: state || null,
+      postalCode: postalCode || null,
+      verified: true, // ✅ skip verification
+      paymentStatus: 'unpaid'
+    });
+
+    await user.save();
+
+    const jwtToken = jwt.sign(
+      { _id: user._id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({
+      Success: true,
+      Message: 'Registration via Google successful',
+      Token: jwtToken,
+      paymentStatus: user.paymentStatus
+    });
+  } catch (error) {
+    console.error('❌ Google registration error:', error.message);
+    return res.status(500).json({ Success: false, Message: 'Internal Server Error', Error: error.message });
+  }
+};
+
+
 const verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
+    console.log('Received verification token:', token);
 
     const user = await authDB.findOne({ verificationToken: token });
+    console.log('User found:', user ? user.email : 'No user found');
 
     if (!user) {
       return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
@@ -186,7 +256,9 @@ const verifyEmail = async (req, res) => {
 
     user.verified = true;
     user.verificationToken = '';
+    console.log('Updating user:', { email: user.email, verified: true });
     await user.save();
+    console.log('User saved successfully');
 
     const authToken = jwt.sign(
       { _id: user._id, email: user.email },
@@ -194,7 +266,9 @@ const verifyEmail = async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    return res.redirect(`${process.env.BASE_URL}/verify-email.html?token=${authToken}`);
+    const redirectUrl = `http://127.0.0.1:5500/reset-password.html?token=${authToken}`;
+    console.log('Redirecting to:', redirectUrl);
+    return res.redirect(redirectUrl);
   } catch (error) {
     console.error('❌ Error in verify-email route:', error.message);
     return res.status(500).json({
@@ -292,9 +366,9 @@ module.exports = {
   verifyEmail,
   login,
   googleLogin,
+  googleRegister, 
   forgotPassword,
   resetPassword,
   getProfile,
   updateProfile
 };
-
