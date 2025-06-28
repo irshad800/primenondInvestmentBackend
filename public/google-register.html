@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Complete Registration</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    form { max-width: 400px; margin: auto; }
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin: 8px 0;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover { background-color: #45a049; }
+  </style>
+</head>
+<body>
+  <h2>Complete Your Registration</h2>
+
+  <form id="googleRegForm">
+    <input type="text" name="username" placeholder="Username" required />
+    <input type="text" name="name" placeholder="Full Name" required />
+    <input type="text" name="phone" placeholder="Phone" />
+    <input type="text" name="passportNumber" placeholder="Passport No." />
+    <input type="date" name="dob" placeholder="Date of Birth" />
+    <input type="hidden" name="email" id="emailInput" />
+    <input type="hidden" name="token" id="tokenInput" />
+    <button type="submit">Submit</button>
+  </form>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    const email = localStorage.getItem('userEmail');
+
+    if (!token || !email) {
+      alert('Missing token or email. Please login again.');
+      window.location.href = 'google-login.html';
+    } else {
+      document.getElementById('emailInput').value = email;
+      document.getElementById('tokenInput').value = token;
+    }
+
+    document.getElementById('googleRegForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const formData = new FormData(e.target);
+      const payload = {};
+      formData.forEach((value, key) => payload[key] = value);
+
+      try {
+        const res = await fetch('http://localhost:5000/api/auth/google-register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (data.Success) {
+          alert('Registration complete!');
+          window.location.href = 'dashboard.html'; // ✅ or any next step
+        } else {
+          alert(data.Message || 'Registration failed.');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Server error. Try again.');
+      }
+    });
+  </script>
+</body>
+</html>

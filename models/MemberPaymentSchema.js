@@ -39,6 +39,10 @@ const MemberPaymentSchema = new mongoose.Schema({
     enum: ['bank', 'cash', 'card', 'walletcrypto'],
     required: true
   },
+  paymentUrl: {
+    type: String,
+    default: null // Added as per previous fix
+  },
   createdAt: {
     type: Date,
     default: Date.now

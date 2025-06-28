@@ -3,9 +3,8 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 dotenv.config();
-const { confirmPayment } = require('../controllers/adminController');
+const { confirmPayment, updateKycStatus } = require('../controllers/adminController');
 
-// Admin login
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -37,7 +36,7 @@ router.post('/login', (req, res) => {
   });
 });
 
-// Confirm payment (registration or investment)
 router.post('/confirm-payment', confirmPayment);
+router.post('/kyc/update-status', updateKycStatus);
 
 module.exports = router;

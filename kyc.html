@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KYC Verification - Prime Bond</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.22.5/Babel.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const App = () => {
+      const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('token'));
+      const [loginData, setLoginData] = useState({ email: '', password: '' });
+      const [loginMessage, setLoginMessage] = useState('');
+      const [loginError, setLoginError] = useState('');
+      const [formData, setFormData] = useState({
+        idType: '',
+        idNumber: '',
+        issuingCountry: '',
+        dateOfIssue: '',
+        dateOfExpiry: '',
+        declarationConfirmed: false,
+        amlConsent: false,
+        termsAccepted: false,
+      });
+      const [idDocument, setIdDocument] = useState(null);
+      const [selfie, setSelfie] = useState(null);
+      const [status, setStatus] = useState(null);
+      const [message, setMessage] = useState('');
+      const [error, setError] = useState('');
+      const [kycRecords, setKycRecords] = useState([]);
+      const [adminUpdate, setAdminUpdate] = useState({
+        kycId: '',
+        status: 'pending',
+        adminPassword: '',
+        message: ''
+      });
+      const [isAdmin, setIsAdmin] = useState(false);
+
+      const token = localStorage.getItem('token');
+
+      // Fetch KYC status for the user
+      useEffect(() => {
+        if (token) {
+          axios.get('http://localhost:5000/api/kyc/admin/all', {
+            headers: { Authorization: `Bearer ${token}` }
+          })
+            .then(response => {
+              if (response.data.success && response.data.data) {
+                setKycRecords(response.data.data);
+                setIsAdmin(response.data.data.some(record => record.userId.role === 'admin'));
+                const userKyc = response.data.data.find(record => record.userId._id === getUserIdFromToken());
+                if (userKyc) setStatus(userKyc.status);
+              } else {
+                setError('Failed to fetch KYC status: No data or permission denied');
+              }
+            })
+            .catch(err => {
+              console.error('Error fetching KYC records:', err);
+              setError('Failed to fetch KYC status: ' + (err.response?.statusText || err.message));
+            });
+        }
+      }, [token]);
+
+      // Helper to decode user ID from JWT
+      const getUserIdFromToken = () => {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          return payload._id;
+        } catch {
+          return null;
+        }
+      };
+
+      // Handle login input changes
+      const handleLoginChange = (e) => {
+        const { name, value } = e.target;
+        setLoginData(prev => ({ ...prev, [name]: value }));
+      };
+
+      // Handle login submission
+      const handleLogin = async (e) => {
+        e.preventDefault();
+        setLoginError('');
+        setLoginMessage('');
+
+        try {
+          const response = await axios.post('http://localhost:5000/api/auth/login', loginData);
+          if (response.data.Success) {
+            localStorage.setItem('token', response.data.Token);
+            setIsLoggedIn(true);
+            setLoginMessage('Login successful! Redirecting to KYC...');
+            setTimeout(() => setLoginMessage(''), 2000); // Clear message after 2 seconds
+          }
+        } catch (err) {
+          setLoginError(err.response?.data?.Message || 'Login failed.');
+        }
+      };
+
+      // Handle form input changes
+      const handleInputChange = (e) => {
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => ({
+          ...prev,
+          [name]: type === 'checkbox' ? checked : value
+        }));
+      };
+
+      // Handle file input changes
+      const handleFileChange = (e, type) => {
+        const file = e.target.files[0];
+        if (file && ['image/jpeg', 'image/png', 'application/pdf'].includes(file.type)) {
+          type === 'idDocument' ? setIdDocument(file) : setSelfie(file);
+        } else {
+          setError('Invalid file type. Please upload JPEG, PNG, or PDF.');
+        }
+      };
+
+      // Handle KYC form submission
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setMessage('');
+
+        if (!idDocument || !selfie) {
+          setError('Both ID document and selfie are required.');
+          return;
+        }
+
+        const form = new FormData();
+        Object.keys(formData).forEach(key => form.append(key, formData[key]));
+        form.append('idDocument', idDocument);
+        form.append('selfie', selfie);
+
+        try {
+          const response = await axios.post('http://localhost:5000/api/kyc/kyc', form, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'multipart/form-data'
+            }
+          });
+          setMessage(response.data.message);
+          setStatus('pending');
+        } catch (err) {
+          setError(err.response?.data?.error || 'Failed to submit KYC.');
+        }
+      };
+
+      // Handle admin KYC status update
+      const handleAdminUpdate = async (e) => {
+        e.preventDefault();
+        setError('');
+        setMessage('');
+
+        try {
+          const response = await axios.post('http://localhost:5000/api/admin/kyc/update-status', adminUpdate, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          setMessage(response.data.message);
+          setKycRecords(prev => prev.map(record => 
+            record._id === adminUpdate.kycId ? { ...record, status: adminUpdate.status } : record
+          ));
+          // Update user's status if they are the one being updated
+          const userKyc = kycRecords.find(record => record._id === adminUpdate.kycId);
+          if (userKyc && userKyc.userId._id === getUserIdFromToken()) {
+            setStatus(adminUpdate.status);
+          }
+        } catch (err) {
+          setError(err.response?.data?.message || 'Failed to update KYC status.');
+        }
+      };
+
+      if (!isLoggedIn) {
+        return (
+          <div className="container mx-auto p-4 max-w-md">
+            <h1 className="text-3xl font-bold mb-6 text-center">Login</h1>
+            {loginMessage && <p className="text-green-600 mb-4">{loginMessage}</p>}
+            {loginError && <p className="text-red-600 mb-4">{loginError}</p>}
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">Email</label>
+                <input
+                  type="email"
+                  name="email"
+                  value={loginData.email}
+                  onChange={handleLoginChange}
+                  className="w-full p-2 border rounded"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Password</label>
+                <input
+                  type="password"
+                  name="password"
+                  value={loginData.password}
+                  onChange={handleLoginChange}
+                  className="w-full p-2 border rounded"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+              >
+                Login
+              </button>
+            </form>
+          </div>
+        );
+      }
+
+      return (
+        <div className="container mx-auto p-4 max-w-2xl">
+          <h1 className="text-3xl font-bold mb-6 text-center">KYC Verification</h1>
+
+          {status && (
+            <div className="mb-6 p-4 bg-gray-100 rounded-lg text-center">
+              <p className="text-lg">KYC Status: <span className={`font-semibold ${
+                status === 'approved' ? 'text-green-600' : status === 'rejected' ? 'text-red-600' : 'text-yellow-600'
+              }`}>{status.charAt(0).toUpperCase() + status.slice(1)}</span></p>
+              {status === 'rejected' && (
+                <p className="text-sm text-gray-600 mt-2">Please resubmit if required.</p>
+              )}
+            </div>
+          )}
+
+          {message && <p className="text-green-600 mb-4">{message}</p>}
+          {error && <p className="text-red-600 mb-4">{error}</p>}
+
+          {!status || (status === 'rejected') ? (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">ID Type</label>
+                <select
+                  name="idType"
+                  value={formData.idType}
+                  onChange={handleInputChange}
+                  className="w-full p-2 border rounded"
+                  required
+                  disabled={status && status !== 'rejected'}
+                >
+                  <option value="">Select ID Type</option>
+                  <option value="Passport">Passport</option>
+                  <option value="Driver's License">Driver's License</option>
+                  <option value="National ID">National ID</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium">ID Number</label>
+                <input
+                  type="text"
+                  name="idNumber"
+                  value={formData.idNumber}
+                  onChange={handleInputChange}
+                  className="w-full p-2 border rounded"
+                  required
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Issuing Country</label>
+                <input
+                  type="text"
+                  name="issuingCountry"
+                  value={formData.issuingCountry}
+                  onChange={handleInputChange}
+                  className="w-full p-2 border rounded"
+                  required
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Date of Issue</label>
+                <input
+                  type="date"
+                  name="dateOfIssue"
+                  value={formData.dateOfIssue}
+                  onChange={handleInputChange}
+                  className="w-full p-2 border rounded"
+                  required
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Date of Expiry</label>
+                <input
+                  type="date"
+                  name="dateOfExpiry"
+                  value={formData.dateOfExpiry}
+                  onChange={handleInputChange}
+                  className="w-full p-2 border rounded"
+                  required
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">ID Document (JPEG/PNG/PDF)</label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,application/pdf"
+                  onChange={(e) => handleFileChange(e, 'idDocument')}
+                  className="w-full p-2 border rounded"
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Selfie (JPEG/PNG)</label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={(e) => handleFileChange(e, 'selfie')}
+                  className="w-full p-2 border rounded"
+                  disabled={status && status !== 'rejected'}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    name="declarationConfirmed"
+                    checked={formData.declarationConfirmed}
+                    onChange={handleInputChange}
+                    className="mr-2"
+                    required
+                    disabled={status && status !== 'rejected'}
+                  />
+                  I confirm the provided information is accurate
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    name="amlConsent"
+                    checked={formData.amlConsent}
+                    onChange={handleInputChange}
+                    className="mr-2"
+                    required
+                    disabled={status && status !== 'rejected'}
+                  />
+                  I consent to AML checks
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    name="termsAccepted"
+                    checked={formData.termsAccepted}
+                    onChange={handleInputChange}
+                    className="mr-2"
+                    required
+                    disabled={status && status !== 'rejected'}
+                  />
+                  I accept the terms and conditions
+                </label>
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                disabled={status && status !== 'rejected'}
+              >
+                Submit KYC
+              </button>
+            </form>
+          ) : (
+            <p className="text-center text-gray-600">Your KYC is currently {status}. Please wait for admin response.</p>
+          )}
+
+          {isAdmin && (
+            <div className="mt-8">
+              <h2 className="text-2xl font-bold mb-4">Admin: KYC Records</h2>
+              <form onSubmit={handleAdminUpdate} className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium">Select KYC Record</label>
+                  <select
+                    value={adminUpdate.kycId}
+                    onChange={(e) => setAdminUpdate({ ...adminUpdate, kycId: e.target.value })}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="">Select a KYC record</option>
+                    {kycRecords.map(record => (
+                      <option key={record._id} value={record._id}>
+                        {record.userId.email} - {record.idType} ({record.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Status</label>
+                  <select
+                    value={adminUpdate.status}
+                    onChange={(e) => setAdminUpdate({ ...adminUpdate, status: e.target.value })}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Admin Password</label>
+                  <input
+                    type="password"
+                    value={adminUpdate.adminPassword}
+                    onChange={(e) => setAdminUpdate({ ...adminUpdate, adminPassword: e.target.value })}
+                    className="w-full p-2 border rounded"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Message</label>
+                  <textarea
+                    value={adminUpdate.message}
+                    onChange={(e) => setAdminUpdate({ ...adminUpdate, message: e.target.value })}
+                    placeholder="Optional message to user"
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+                >
+                  Update KYC Status
+                </button>
+              </form>
+              <div className="mt-6">
+                {kycRecords.map(record => (
+                  <div key={record._id} className="p-4 bg-gray-50 rounded-lg mb-2">
+                    <p><strong>Email:</strong> {record.userId.email}</p>
+                    <p><strong>ID Type:</strong> {record.idType}</p>
+                    <p><strong>Status:</strong> {record.status}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

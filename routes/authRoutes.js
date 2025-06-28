@@ -12,6 +12,7 @@ const {
   verifyEmail,
   login,
   googleLogin,
+  googleRegister, // ✅ included here
   forgotPassword,
   resetPassword,
   getProfile,
@@ -29,6 +30,9 @@ router.post('/login', login);
 
 // Google Login
 router.post('/google-login', googleLogin);
+
+// Google-based Registration (no email input or verification needed)
+router.post('/google-register', googleRegister); // ✅ route added
 
 // Forgot Password
 router.post('/forgot-password', forgotPassword);

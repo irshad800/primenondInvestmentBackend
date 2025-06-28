@@ -89,7 +89,7 @@ resetTokenExpiry: {
   },
   lastPaymentLink: {
     type: String,
-    default: null
+    default: null    
   },
   cryptoCoin: {
     type: String,

@@ -1,9 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET);
-const { payRegister, payInvestment, callback } = require('../controllers/paymentController');
-const { ensureAuth } = require('../middleware/authMiddleware');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +8,8 @@ const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
+const { payRegister, payInvestment, callback } = require('../controllers/paymentController');
+const { ensureAuth } = require('../middleware/authMiddleware');
 
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
@@ -200,87 +198,13 @@ async function generateAndSendReceipt(data, userEmail, userName, userInfo = {}) 
   }
 }
 
-router.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error('❌ Stripe Webhook Error:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = await stripe.checkout.sessions.retrieve(event.data.object.id, {
-      expand: ['payment_intent']
-    });
-
-    const paymentIntentId = session.payment_intent.id;
-    console.log("💳 Stripe PaymentIntent ID:", paymentIntentId);
-
-    const payment = await MemberPayment.findOneAndUpdate(
-      { payment_reference: session.id },
-      { status: 'success' },
-      { new: true }
-    );
-
-    if (payment) {
-      const user = await authDB.findById(payment.userId);
-      if (user) {
-        if (!user.userId) {
-          user.userId = await generateNextUserId();
-        }
-
-        user.paymentStatus = 'success';
-        user.paymentMethod = 'card';
-        user.transactionId = session.id;
-        user.lastPaymentLink = session.url || null;
-        user.cryptoCoin = null;
-        await user.save();
-
-        if (payment.investmentId) {
-          const investment = await Investment.findById(payment.investmentId);
-          if (investment) {
-            investment.status = 'active';
-            await investment.save();
-          }
-        }
-
-        const orderDescription = payment.investmentId
-          ? `Prime Bond ${(await InvestmentPlan.findById((await Investment.findById(payment.investmentId)).planId)).name} Investment`
-          : 'Prime Bond Registration';
-
-        await generateAndSendReceipt({
-          payment_id: session.id,
-          updated_at: new Date().toISOString(),
-          price_amount: session.amount_total / 100,
-          pay_currency: session.currency,
-          order_description: orderDescription,
-          payment_status: 'success',
-          payment_method: 'CARD'
-        }, user.email, user.name, {
-          userId: user.userId,
-          phone: user.phone,
-          alternateContact: user.alternateContact,
-          passportNumber: user.passportNumber,
-          addressLine1: user.street || '-',
-          addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
-        });
-      }
-    }
-  }
-
-  res.status(200).json({ received: true });
-});
-
 router.get('/test-receipt', async (req, res) => {
   try {
     const fakePaymentData = {
       payment_id: 'TEST12345678',
       updated_at: new Date().toISOString(),
       price_amount: 50,
-      pay_currency: 'usd',
+      pay_currency: 'INR',
       order_description: 'Prime Bond Test Membership',
       payment_status: 'success',
       payment_method: 'CARD'

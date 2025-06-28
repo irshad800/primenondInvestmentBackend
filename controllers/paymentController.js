@@ -2,11 +2,87 @@ const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
-const fetch = require('node-fetch');
-const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET);
+const crypto = require('crypto');
 const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes');
 const { calculateNextPayoutDate } = require('../utils/calculateReturn');
+
+/**
+ * Helper function to encrypt data for CCAvenue
+ */
+
+function encryptCCAvenue(data, workingKey) {
+  console.log('🔐 Encryption Input:', {
+    dataLength: data.length,
+    workingKeyExists: !!workingKey,
+    workingKeyLength: workingKey?.length,
+    workingKeySample: workingKey ? `${workingKey.substring(0, 3)}...${workingKey.substring(workingKey.length - 3)}` : 'undefined'
+  });
+
+  if (!workingKey) {
+    console.error('❌ No working key provided');
+    return undefined;
+  }
+
+  try {
+    const key = Buffer.from(workingKey, 'hex');
+    console.log('🔑 Key Buffer:', {
+      length: key.length,
+      content: key.toString('hex')
+    });
+
+    const iv = Buffer.alloc(16, 0);
+    const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
+    
+    let encrypted = cipher.update(data, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    console.log('🔒 Encryption Successful:', {
+      outputLength: encrypted.length,
+      outputSample: `${encrypted.substring(0, 10)}...`
+    });
+    
+    return encrypted;
+  } catch (err) {
+    console.error('❌ Encryption Error:', err.message);
+    console.error('Stack:', err.stack);
+    return undefined;
+  }
+}
+
+
+
+
+/**
+ * Helper function to decrypt CCAvenue response
+ */
+function decryptCCAvenue(encryptedData, workingKey) {
+const key = Buffer.from(workingKey, 'hex'); // <-- FIXED
+  const iv = Buffer.alloc(16, 0); // CCAvenue uses a zero IV
+  const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+/**
+ * Helper function to format CCAvenue request data
+ */
+function formatCCAvenueRequest(params) {
+  return Object.keys(params)
+    .map(key => `${key}=${encodeURIComponent(params[key])}`)
+    .join('&');
+}
+
+/**
+ * Validate CCAvenue environment variables
+ */
+function validateCCAvenueEnv() {
+  const requiredVars = ['CCAVENUE_MERCHANT_ID', 'CCAVENUE_ACCESS_CODE', 'CCAVENUE_WORKING_KEY', 'BASE_URL'];
+  const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  if (missingVars.length) {
+    throw new Error(`Missing CCAvenue environment variables: ${missingVars.join(', ')}`);
+  }
+}
 
 /**
  * @desc    Process registration payment
@@ -15,46 +91,45 @@ const { calculateNextPayoutDate } = require('../utils/calculateReturn');
  */
 const payRegister = async (req, res) => {
   try {
-    // Validate user authentication
     const userMongoId = req.user?._id;
     if (!userMongoId) {
+      console.error('🔒 Authentication Error: No user ID in request');
       return res.status(401).json({ 
         success: false,
         error: 'Unauthorized: User not authenticated' 
       });
     }
 
-    // Find user in database
     const user = await authDB.findById(userMongoId);
     if (!user) {
+      console.error(`🔍 User Not Found: ID ${userMongoId}`);
       return res.status(404).json({ 
         success: false,
         error: 'User not found' 
       });
     }
 
-    // Check if payment already completed
     if (user.paymentStatus === 'success') {
+      console.warn(`⚠️ Duplicate Payment Attempt: ${user.email}`);
       return res.status(400).json({
         success: false,
         message: 'You have already completed your registration payment.'
       });
     }
 
-    // Payment configuration
     const fixedAmount = 50.0;
     const method = req.body.method?.trim().toLowerCase();
-    const paymentCurrency = req.body.currency || 'usdttrc20';
+    const paymentCurrency = 'inr';
 
-    console.log('🔍 Payment Initiated:', {
+    console.log('🔍 Payment Initiated (Live Mode):', {
       user: user.email,
-      rawBody: req.body,
       method: method,
-      amount: fixedAmount
+      amount: fixedAmount,
+      currency: paymentCurrency
     });
 
-    // Validate payment method
     if (!method) {
+      console.error('🚫 Missing Payment Method');
       return res.status(400).json({ 
         success: false,
         error: 'Payment method is required' 
@@ -63,17 +138,15 @@ const payRegister = async (req, res) => {
 
     const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
     if (!validMethods.includes(method)) {
+      console.error(`🚫 Invalid Payment Method: ${method}`);
       return res.status(400).json({ 
         success: false,
         error: `Invalid payment method: ${method}` 
       });
     }
 
-    // Handle Bank or Cash payment
     if (['bank', 'cash'].includes(method)) {
-      console.log(`💵 Confirmed ${method} payment processing for ${user.email}`);
-
-      // Update user
+      console.log(`💵 Processing ${method.toUpperCase()} payment for ${user.email} (Live Mode)`);
       await authDB.updateOne(
         { _id: userMongoId },
         {
@@ -86,12 +159,11 @@ const payRegister = async (req, res) => {
         }
       );
 
-      // Create payment record
       const paymentRecord = new MemberPayment({
         payment_reference: `${method.toUpperCase()}-REG-${Date.now()}`,
         userId: user._id,
         amount: fixedAmount,
-        currency: 'usd',
+        currency: paymentCurrency,
         customer: {
           name: user.name,
           email: user.email,
@@ -103,188 +175,119 @@ const payRegister = async (req, res) => {
       });
 
       await paymentRecord.save();
-
+      console.log(`✅ ${method.toUpperCase()} Payment Recorded: ${paymentRecord.payment_reference}`);
       return res.json({
         success: true,
         message: `${method === 'bank' ? 'Bank transfer' : 'Cash'} payment recorded. Awaiting admin confirmation.`,
-        paymentMethod: method
+        paymentMethod: method,
+        paymentId: paymentRecord._id
       });
     }
 
-    // Handle Card payment
-    if (method === 'card') {
-      console.log(`💳 Processing CARD payment for ${user.email}`);
-      
+    if (['card', 'walletcrypto'].includes(method)) {
+      console.log(`💳 Initiating ${method.toUpperCase()} payment for ${user.email} (Live Mode)`);
+      console.log('🔍 CCAvenue Credentials (Live Mode):', {
+        merchantId: process.env.CCAVENUE_MERCHANT_ID,
+        accessCode: process.env.CCAVENUE_ACCESS_CODE,
+        workingKey: process.env.CCAVENUE_WORKING_KEY.substring(0, 3) + '...' + process.env.CCAVENUE_WORKING_KEY.substring(process.env.CCAVENUE_WORKING_KEY.length - 3)
+      });
+
+      validateCCAvenueEnv();
+
       try {
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ['card'],
-          line_items: [{
-            price_data: {
-              currency: 'usd',
-              product_data: { 
-                name: 'Prime Bond Registration',
-                description: 'Member registration fee'
-              },
-              unit_amount: fixedAmount * 100
-            },
-            quantity: 1
-          }],
-          mode: 'payment',
-          customer_email: user.email,
-          success_url: `${process.env.BASE_URL}/payment-success.html?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
-          payment_method_options: { 
-            card: { 
-              request_three_d_secure: 'any' 
-            } 
-          },
-          metadata: { 
-            userId: user._id.toString(),
-            paymentType: 'registration'
-          }
-        });
+        const paymentReference = `REG-${user._id}-${Date.now()}`;
+        const ccavenueParams = {
+          merchant_id: process.env.CCAVENUE_MERCHANT_ID,
+          order_id: paymentReference,
+          currency: paymentCurrency,
+          amount: fixedAmount.toFixed(2),
+          redirect_url: `${process.env.BASE_URL}/api/pay/callback`, // Ensure this is your live domain
+          cancel_url: `${process.env.BASE_URL}/payment-cancel.html`, // Ensure this is your live domain
+          billing_name: user.name || 'N/A',
+          billing_email: user.email,
+          billing_tel: user.phone || 'N/A',
+          billing_address: user.street || 'N/A',
+          billing_city: user.city || 'N/A',
+          billing_state: user.state || 'N/A',
+          billing_zip: user.postalCode || 'N/A',
+          billing_country: user.country || 'India',
+          language: 'EN',
+          payment_option: method === 'card' ? 'CC' : 'WALLET'
+        };
+
+        console.log('🔍 CCAvenue Parameters (Live Mode):', ccavenueParams);
+        const requestData = formatCCAvenueRequest(ccavenueParams);
+        const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
+        console.log('🔍 Generated encRequest (Live Mode):', encRequest);
+        if (!encRequest) {
+          console.error('❌ encRequest is undefined');
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to generate encrypted request'
+          });
+        }
+
+        const paymentUrl = `https://secure.ccavenue.com/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
+        console.log('🔍 Constructed paymentUrl (Live Mode):', paymentUrl);
 
         const paymentRecord = new MemberPayment({
-          payment_reference: session.id,
+          payment_reference: paymentReference,
           userId: user._id,
           amount: fixedAmount,
-          currency: 'usd',
+          currency: paymentCurrency,
           customer: {
             name: user.name,
             email: user.email,
             phone: user.phone || 'N/A'
           },
           status: 'pending',
-          paymentMethod: 'card',
+          paymentMethod: method,
           paymentType: 'registration',
-          paymentUrl: session.url
+          paymentUrl: paymentUrl
         });
 
-        await paymentRecord.save();
+        try {
+          await paymentRecord.save();
+          console.log('🔍 Saved paymentRecord (Live Mode):', paymentRecord.toObject());
+        } catch (saveError) {
+          console.error('❌ Error saving paymentRecord:', saveError);
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to save payment record',
+            details: saveError.message
+          });
+        }
 
         await authDB.updateOne(
           { _id: userMongoId },
           {
             paymentStatus: 'pending',
-            paymentMethod: 'card',
-            transactionId: session.id,
-            lastPaymentLink: session.url,
+            paymentMethod: method,
+            transactionId: paymentReference,
+            lastPaymentLink: paymentUrl,
             cryptoCoin: null,
             updatedAt: new Date()
           }
         );
 
+        console.log(`✅ CCAvenue Payment URL Generated (Live Mode): ${paymentUrl}`);
         return res.json({ 
           success: true, 
-          sessionId: session.id, 
-          url: session.url,
-          paymentMethod: 'card'
+          sessionId: paymentReference, 
+          url: paymentUrl,
+          paymentMethod: method
         });
-
-      } catch (stripeError) {
-        console.error('❌ Stripe Error:', stripeError);
+      } catch (error) {
+        console.error('❌ CCAvenue Payment Error (Live Mode):', error.message);
         return res.status(500).json({ 
           success: false,
-          error: 'Failed to process card payment',
-          details: stripeError.message
+          error: `Failed to initiate ${method} payment`,
+          details: error.message
         });
       }
     }
-
-    // Handle Crypto payment (NOWPayments)
-    if (method === 'walletcrypto') {
-      console.log(`🪙 Processing CRYPTO payment for ${user.email} in ${paymentCurrency}`);
-      
-      try {
-        const invoiceRes = await fetch('https://api.nowpayments.io/v1/invoice', {
-          method: 'POST',
-          headers: {
-            'x-api-key': process.env.NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-          },
-        body: JSON.stringify({
-  price_amount: fixedAmount,               // This is the price in USD
-  pay_amount: fixedAmount,                // This is the amount user will pay in crypto
-  price_currency: 'usd',
-  pay_currency: paymentCurrency,          // e.g., 'usdttrc20'
-  order_description: 'Prime Bond Registration',
-  ipn_callback_url: `${process.env.BASE_URL}/api/pay/callback`,
-  success_url: `${process.env.BASE_URL}/dashboard.html`,
-  cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
-  customer_email: user.email
-})
-
-        });
-
-        const invoiceData = await invoiceRes.json();
-
-        if (!invoiceData.invoice_url || !invoiceData.id) {
-          console.error('❌ NOWPayments Error:', invoiceData);
-          return res.status(500).json({ 
-            success: false,
-            error: 'Failed to create payment invoice',
-            details: invoiceData
-          });
-        }
-
-        const paymentRecord = new MemberPayment({
-          payment_reference: invoiceData.id,
-          userId: user._id,
-          amount: fixedAmount,
-          currency: paymentCurrency,
-          customer: {
-            name: user.name,
-            email: user.email,
-            phone: user.phone || 'N/A'
-          },
-          status: 'pending',
-          paymentMethod: 'walletcrypto',
-          paymentType: 'registration',
-          paymentUrl: invoiceData.invoice_url
-        });
-
-        await paymentRecord.save();
-
-        await authDB.updateOne(
-          { _id: userMongoId },
-          {
-            paymentStatus: 'pending',
-            paymentMethod: 'walletcrypto',
-            transactionId: invoiceData.id,
-            lastPaymentLink: invoiceData.invoice_url,
-            cryptoCoin: paymentCurrency,
-            updatedAt: new Date()
-          }
-        );
-
-        return res.json({
-          success: true,
-          message: 'Crypto payment invoice created successfully',
-          transactionId: invoiceData.id,
-          redirectURL: invoiceData.invoice_url,
-          payAmount: fixedAmount,
-          currency: paymentCurrency,
-          paymentMethod: 'walletcrypto'
-        });
-
-      } catch (nowpaymentsError) {
-        console.error('❌ NOWPayments Error:', nowpaymentsError);
-        return res.status(500).json({ 
-          success: false,
-          error: 'Failed to process crypto payment',
-          details: nowpaymentsError.message
-        });
-      }
-    }
-
-    // This should never be reached due to validation, but added as a safeguard
-    return res.status(500).json({ 
-      success: false,
-      error: 'Unexpected payment method processing error' 
-    });
-
   } catch (error) {
-    console.error('❌ Payment Processing Error:', error);
+    console.error('❌ Payment Processing Error (Live Mode):', error.message);
     return res.status(500).json({ 
       success: false,
       error: 'Failed to process payment',
@@ -298,37 +301,52 @@ const payRegister = async (req, res) => {
  * @route   POST /api/pay/investment
  * @access  Private
  */
+
 const payInvestment = async (req, res) => {
   try {
     // Validate user authentication
     const userMongoId = req.user?._id;
     if (!userMongoId) {
+      console.error('🔒 Authentication Error: No user ID in request');
       return res.status(401).json({ 
         success: false,
         error: 'Unauthorized: User not authenticated' 
       });
     }
 
-    // Validate request body
-    const { planId, amount, method, currency } = req.body;
-    if (!planId || !amount) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields: planId or amount' 
-      });
-    }
-
-    // Find user and plan
+    // Find user in database
     const user = await authDB.findById(userMongoId);
     if (!user) {
+      console.error(`🔍 User Not Found: ID ${userMongoId}`);
       return res.status(404).json({ 
         success: false,
         error: 'User not found' 
       });
     }
 
+    // Check if registration payment is completed
+    if (user.paymentStatus !== 'success') {
+      console.warn(`⚠️ Registration Payment Incomplete: ${user.email}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Registration payment must be completed before making an investment payment.'
+      });
+    }
+
+    // Validate request body
+    const { planId, amount, method, currency } = req.body;
+    if (!planId || !amount || !method) {
+      console.error('🚫 Missing Required Fields:', { planId, amount, method });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields: planId, amount, or method' 
+      });
+    }
+
+    // Find plan
     const plan = await InvestmentPlan.findById(planId);
     if (!plan) {
+      console.error(`🔍 Investment Plan Not Found: ID ${planId}`);
       return res.status(404).json({ 
         success: false,
         error: 'Investment plan not found' 
@@ -337,6 +355,7 @@ const payInvestment = async (req, res) => {
 
     // Validate amount against plan limits
     if (amount < plan.minAmount) {
+      console.error(`🚫 Amount Below Minimum: ${amount} < ${plan.minAmount}`);
       return res.status(400).json({ 
         success: false, 
         message: `Minimum investment amount is $${plan.minAmount}` 
@@ -344,6 +363,7 @@ const payInvestment = async (req, res) => {
     }
 
     if (plan.maxAmount && amount > plan.maxAmount) {
+      console.error(`🚫 Amount Above Maximum: ${amount} > ${plan.maxAmount}`);
       return res.status(400).json({ 
         success: false, 
         message: `Maximum investment amount is $${plan.maxAmount}` 
@@ -362,16 +382,10 @@ const payInvestment = async (req, res) => {
     });
 
     // Validate payment method
-    const paymentMethod = method?.toLowerCase();
-    if (!paymentMethod) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Payment method is required' 
-      });
-    }
-
+    const paymentMethod = method.toLowerCase();
     const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
     if (!validMethods.includes(paymentMethod)) {
+      console.error(`🚫 Invalid Payment Method: ${paymentMethod}`);
       return res.status(400).json({ 
         success: false,
         error: `Invalid payment method: ${paymentMethod}` 
@@ -382,7 +396,8 @@ const payInvestment = async (req, res) => {
       user: user.email,
       plan: plan.name,
       method: paymentMethod,
-      amount: amount
+      amount: amount,
+      currency: currency || 'INR'
     });
 
     // Handle Bank or Cash payment
@@ -395,7 +410,7 @@ const payInvestment = async (req, res) => {
         payment_reference: `${paymentMethod.toUpperCase()}-INV-${Date.now()}`,
         userId: user._id,
         amount: amount,
-        currency: 'usd',
+        currency: 'INR',
         customer: {
           name: user.name,
           email: user.email,
@@ -409,6 +424,7 @@ const payInvestment = async (req, res) => {
 
       await paymentRecord.save();
 
+      console.log(`✅ ${paymentMethod.toUpperCase()} Investment Recorded: ${paymentRecord.payment_reference}`);
       return res.json({
         success: true,
         message: `${paymentMethod === 'bank' ? 'Bank transfer' : 'Cash'} investment recorded. Awaiting admin confirmation.`,
@@ -418,159 +434,80 @@ const payInvestment = async (req, res) => {
       });
     }
 
-    // Handle Card payment
-    if (paymentMethod === 'card') {
-      console.log(`💳 Processing CARD investment for ${user.email}`);
+    // Handle Card or Wallet payment (CCAvenue)
+    if (['card', 'walletcrypto'].includes(paymentMethod)) {
+      console.log(`💳 Initiating ${paymentMethod.toUpperCase()} investment for ${user.email}`);
       
+      // Validate CCAvenue environment variables
+      validateCCAvenueEnv();
+
       try {
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ['card'],
-          line_items: [{
-            price_data: {
-              currency: 'usd',
-              product_data: { 
-                name: `Prime Bond ${plan.name}`,
-                description: `Investment plan (${plan.durationMonths} months)`
-              },
-              unit_amount: amount * 100
-            },
-            quantity: 1
-          }],
-          mode: 'payment',
-          customer_email: user.email,
-          success_url: `${process.env.BASE_URL}/payment-success.html?session_id={CHECKOUT_SESSION_ID}`,
+        const paymentReference = `INV-${user._id}-${Date.now()}`;
+        const ccavenueParams = {
+          merchant_id: process.env.CCAVENUE_MERCHANT_ID,
+          order_id: paymentReference,
+          currency: 'INR',
+          amount: amount.toFixed(2),
+          redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
           cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
-          payment_method_options: { 
-            card: { 
-              request_three_d_secure: 'any' 
-            } 
-          },
-          metadata: { 
-            userId: user._id.toString(),
-            planId: planId.toString(),
-            investmentId: investment._id.toString(),
-            paymentType: 'investment'
-          }
-        });
+          billing_name: user.name || 'N/A',
+          billing_email: user.email,
+          billing_tel: user.phone || 'N/A',
+          billing_address: user.street || 'N/A',
+          billing_city: user.city || 'N/A',
+          billing_state: user.state || 'N/A',
+          billing_zip: user.postalCode || 'N/A',
+          billing_country: user.country || 'India',
+          language: 'EN',
+          payment_option: paymentMethod === 'card' ? 'CC' : 'WALLET'
+        };
+
+        // Encrypt request data
+        const requestData = formatCCAvenueRequest(ccavenueParams);
+        const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
 
         await investment.save();
 
         const paymentRecord = new MemberPayment({
-          payment_reference: session.id,
+          payment_reference: paymentReference,
           userId: user._id,
           amount: amount,
-          currency: 'usd',
+          currency: 'INR',
           customer: {
             name: user.name,
             email: user.email,
             phone: user.phone || 'N/A'
           },
           status: 'pending',
-          paymentMethod: 'card',
+          paymentMethod: paymentMethod,
           paymentType: 'investment',
           investmentId: investment._id,
-          paymentUrl: session.url
+          paymentUrl: `https://test.ccavenue.com/transaction/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`
         });
 
         await paymentRecord.save();
 
+        console.log(`✅ CCAvenue Payment URL Generated: ${paymentRecord.paymentUrl}`);
         return res.json({ 
           success: true, 
-          sessionId: session.id, 
-          url: session.url,
-          paymentMethod: 'card',
+          sessionId: paymentReference, 
+          url: paymentRecord.paymentUrl,
+          paymentMethod: paymentMethod,
           investmentId: investment._id
         });
 
-      } catch (stripeError) {
-        console.error('❌ Stripe Error:', stripeError);
+      } catch (error) {
+        console.error('❌ CCAvenue Payment Error:', error.message);
         return res.status(500).json({ 
           success: false,
-          error: 'Failed to process card payment',
-          details: stripeError.message
-        });
-      }
-    }
-
-    // Handle Crypto payment (NOWPayments)
-    if (paymentMethod === 'walletcrypto') {
-      console.log(`🪙 Processing CRYPTO investment for ${user.email} in ${currency || 'usdttrc20'}`);
-      
-      try {
-        const invoiceRes = await fetch('https://api.nowpayments.io/v1/invoice', {
-          method: 'POST',
-          headers: {
-            'x-api-key': process.env.NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            price_amount: amount,
-            price_currency: 'usd',
-            pay_currency: currency || 'usdttrc20',
-            order_description: `Prime Bond ${plan.name} Investment`,
-            ipn_callback_url: `${process.env.BASE_URL}/api/pay/callback`,
-            success_url: `${process.env.BASE_URL}/dashboard.html`,
-            cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
-            customer_email: user.email,
-            order_id: `INV-${user._id}-${Date.now()}`
-          })
-        });
-
-        const invoiceData = await invoiceRes.json();
-
-        if (!invoiceData.invoice_url || !invoiceData.id) {
-          console.error('❌ NOWPayments Error:', invoiceData);
-          return res.status(500).json({ 
-            success: false,
-            error: 'Failed to create investment invoice',
-            details: invoiceData
-          });
-        }
-
-        await investment.save();
-
-        const paymentRecord = new MemberPayment({
-          payment_reference: invoiceData.id,
-          userId: user._id,
-          amount: amount,
-          currency: currency || 'usdttrc20',
-          customer: {
-            name: user.name,
-            email: user.email,
-            phone: user.phone || 'N/A'
-          },
-          status: 'pending',
-          paymentMethod: 'walletcrypto',
-          paymentType: 'investment',
-          investmentId: investment._id,
-          paymentUrl: invoiceData.invoice_url
-        });
-
-        await paymentRecord.save();
-
-        return res.json({
-          success: true,
-          message: 'Crypto investment invoice created successfully',
-          transactionId: invoiceData.id,
-          redirectURL: invoiceData.invoice_url,
-          payAmount: amount,
-          currency: currency || 'usdttrc20',
-          paymentMethod: 'walletcrypto',
-          investmentId: investment._id
-        });
-
-      } catch (nowpaymentsError) {
-        console.error('❌ NOWPayments Error:', nowpaymentsError);
-        return res.status(500).json({ 
-          success: false,
-          error: 'Failed to process crypto payment',
-          details: nowpaymentsError.message
+          error: `Failed to initiate ${paymentMethod} payment`,
+          details: error.message
         });
       }
     }
 
   } catch (error) {
-    console.error('❌ Investment Payment Error:', error);
+    console.error('❌ Investment Payment Error:', error.message);
     return res.status(500).json({ 
       success: false,
       error: 'Failed to process investment payment',
@@ -580,28 +517,52 @@ const payInvestment = async (req, res) => {
 };
 
 /**
- * @desc    Handle payment callback from payment providers
+ * @desc    Handle payment callback from CCAvenue
  * @route   POST /api/pay/callback
- * @access  Public (called by payment providers)
+ * @access  Public
  */
 const callback = async (req, res) => {
   try {
-    const data = req.body;
-    console.log('📥 Payment Callback Received:', {
-      paymentId: data.invoice_id,
-      status: data.payment_status,
-      amount: data.price_amount,
-      currency: data.pay_currency
+    const encResp = req.body.encResp;
+    if (!encResp) {
+      console.error('🚫 Missing encResp in CCAvenue Callback');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Missing encrypted response'
+      });
+    }
+
+    console.log('📥 CCAvenue Callback Received:', { encResp });
+
+
+
+    validateCCAvenueEnv();
+
+
+
+    // Decrypt response
+    const decryptedResponse = decryptCCAvenue(encResp, process.env.CCAVENUE_WORKING_KEY);
+    const responseParams = new URLSearchParams(decryptedResponse);
+    const responseData = Object.fromEntries(responseParams);
+
+    const { order_id, order_status, amount, currency, payment_mode } = responseData;
+
+    console.log('📥 Payment Callback Data:', {
+      paymentId: order_id,
+      status: order_status,
+      amount: parseFloat(amount),
+      currency,
+      paymentMode: payment_mode
     });
 
     // Only process successful payments
-    if (data.payment_status !== 'success') {
-      console.log('ℹ️ Ignoring non-successful payment callback');
+    if (order_status !== 'Success') {
+      console.log(`ℹ️ Non-Successful Payment Callback: ${order_status}`);
       return res.status(200).send('IPN received - payment not successful');
     }
 
     const payment = await MemberPayment.findOneAndUpdate(
-      { payment_reference: data.invoice_id },
+      { payment_reference: order_id },
       { 
         status: 'success',
         updatedAt: new Date()
@@ -610,7 +571,7 @@ const callback = async (req, res) => {
     );
 
     if (!payment) {
-      console.error('❌ Payment record not found for callback');
+      console.error(`❌ Payment Record Not Found: ${order_id}`);
       return res.status(404).send('Payment record not found');
     }
 
@@ -621,6 +582,10 @@ const callback = async (req, res) => {
       }
 
       user.paymentStatus = 'success';
+      user.paymentMethod = payment.paymentMethod;
+      user.transactionId = order_id;
+      user.lastPaymentLink = null;
+      user.cryptoCoin = null;
       user.updatedAt = new Date();
       await user.save();
 
@@ -633,20 +598,19 @@ const callback = async (req, res) => {
         }
       }
 
-      const receiptRes = await fetch('https://api.nowpayments.io/v1/payment', {
-        method: 'POST',
-        headers: {
-          'x-api-key': process.env.NOWPAYMENTS_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ payment_id: data.invoice_id })
-      });
+      const orderDescription = payment.investmentId
+        ? `Prime Bond ${(await InvestmentPlan.findById((await Investment.findById(payment.investmentId)).planId)).name} Investment`
+        : 'Prime Bond Registration';
 
-      let fullData = await receiptRes.json();
-      fullData.payment_status = 'success';
-      fullData.payment_method = 'WALLETCRYPTO';
-
-      await generateAndSendReceipt(fullData, user.email, user.name, {
+      await generateAndSendReceipt({
+        payment_id: order_id,
+        updated_at: new Date().toISOString(),
+        price_amount: parseFloat(amount),
+        pay_currency: currency,
+        order_description: orderDescription,
+        payment_status: 'success',
+        payment_method: payment.paymentMethod.toUpperCase()
+      }, user.email, user.name, {
         userId: user.userId,
         phone: user.phone,
         alternateContact: user.alternateContact,
@@ -655,13 +619,13 @@ const callback = async (req, res) => {
         addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
       });
 
-      console.log(`✅ Successfully processed payment for ${user.email}`);
+      console.log(`✅ Payment Processed Successfully for ${user.email}: ${order_id}`);
     }
 
-    res.status(200).send('IPN received and processed');
+    res.redirect(`${process.env.BASE_URL}/payment-success.html?order_id=${order_id}`);
 
   } catch (error) {
-    console.error('❌ IPN Callback Error:', error);
+    console.error('❌ CCAvenue Callback Error:', error.message);
     res.status(500).json({ 
       success: false,
       message: 'Callback processing failed',

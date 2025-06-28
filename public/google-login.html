@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Google Login</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <h2>Login with Google</h2>
+
+  <div id="g_id_onload"
+       data-client_id="477307244054-d1ja7g04lvc3s8oramafh4mgvsojpsgk.apps.googleusercontent.com"
+       data-context="signin"
+       data-ux_mode="popup"
+       data-callback="handleCredentialResponse">
+  </div>
+
+  <div class="g_id_signin" data-type="standard"></div>
+
+<script>
+  async function handleCredentialResponse(response) {
+    const token = response.credential;
+
+    try {
+      const res = await fetch('http://localhost:5000/api/auth/google-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+
+      const data = await res.json();
+      console.log('Login Response:', data);
+if (data.Success && data.token) {
+  localStorage.setItem('googleToken', data.token);
+  localStorage.setItem('userEmail', data.email);
+  window.location.href = `google-register.html?token=${encodeURIComponent(data.token)}`;
+}
+ else {
+        alert(data.Message || 'Google login failed.');
+      }
+    } catch (err) {
+      console.error('Error during Google login:', err);
+      alert('An error occurred. Try again.');
+    }
+  }
+</script>
+</body>
+</html>
