@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { getPlans, getUserInvestments, getUserReturns } = require('../controllers/investmentController');
+const { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan, selectPlan } = require('../controllers/investmentController');
 const { ensureAuth } = require('../middleware/authMiddleware');
-const { createInvestmentPlan } = require('../controllers/investmentController');
 
 // Get all available investment plans
 router.get('/plans', ensureAuth, getPlans);
@@ -15,5 +14,10 @@ router.get('/returns/:userId', ensureAuth, getUserReturns);
 
 // Admin creates investment plan
 router.post('/plans/create', ensureAuth, createInvestmentPlan);
+
+// Select an investment plan
+router.post('/plans/select', ensureAuth, selectPlan);
+
+
 
 module.exports = router;
