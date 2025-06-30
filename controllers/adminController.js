@@ -2,9 +2,12 @@ const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
+const Roi = require('../models/Roi');
+const Return = require('../models/Return');
 const Kyc = require('../models/Kyc');
 const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes');
 const { transporter } = require('../utils/emailService');
+const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 const confirmPayment = async (req, res) => {
   try {
@@ -72,12 +75,47 @@ const confirmPayment = async (req, res) => {
     let orderDescription = 'Prime Bond Registration';
     if (paymentType === 'investment' && investmentId) {
       const investment = await Investment.findById(investmentId);
-      if (investment) {
-        investment.status = 'active';
-        await investment.save();
-        const plan = await InvestmentPlan.findById(investment.planId);
-        orderDescription = `Prime Bond ${plan.name} Investment`;
+      if (!investment) {
+        return res.status(404).json({ success: false, message: 'Investment not found' });
       }
+      investment.status = 'active';
+      investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
+      investment.updatedAt = new Date();
+      await investment.save();
+
+      // Create ROI and Return records
+      try {
+        const plan = await InvestmentPlan.findById(investment.planId);
+        if (!plan) {
+          console.error('❌ Plan not found for investment:', investment._id);
+          throw new Error('Plan not found');
+        }
+
+        // Create ROI record using InvestmentPlan.returnRate
+        await Roi.findOneAndUpdate(
+          { userId: user._id, investmentId: investment._id },
+          { returnRate: plan.returnRate, updatedAt: new Date() },
+          { upsert: true, new: true }
+        );
+        console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
+
+        // Create initial Return record
+        const returnAmount = calculateReturnAmount(investment.amount, plan.returnRate);
+        const nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
+        await Return.create({
+          userId: user._id,
+          investmentId: investment._id,
+          amount: returnAmount,
+          payoutDate: nextPayoutDate,
+          status: 'pending'
+        });
+        console.log(`💰 Return scheduled: $${returnAmount} for ${investment.payoutOption} payout`);
+      } catch (error) {
+        console.error('❌ ROI/Return Assignment Error:', error.message);
+      }
+
+      const plan = await InvestmentPlan.findById(investment.planId);
+      orderDescription = `Prime Bond ${plan.name} Investment`;
     }
 
     // Generate receipt data

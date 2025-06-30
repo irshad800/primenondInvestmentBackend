@@ -2,14 +2,15 @@ const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
+const Roi = require('../models/Roi');
+const Return = require('../models/Return');
 const crypto = require('crypto');
 const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes');
-const { calculateNextPayoutDate } = require('../utils/calculateReturn');
+const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 /**
  * Helper function to encrypt data for CCAvenue
  */
-
 function encryptCCAvenue(data, workingKey) {
   console.log('🔐 Encryption Input:', {
     dataLength: data.length,
@@ -49,15 +50,12 @@ function encryptCCAvenue(data, workingKey) {
   }
 }
 
-
-
-
 /**
  * Helper function to decrypt CCAvenue response
  */
 function decryptCCAvenue(encryptedData, workingKey) {
-const key = Buffer.from(workingKey, 'hex'); // <-- FIXED
-  const iv = Buffer.alloc(16, 0); // CCAvenue uses a zero IV
+  const key = Buffer.from(workingKey, 'hex');
+  const iv = Buffer.alloc(16, 0);
   const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
   let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
@@ -89,6 +87,18 @@ function validateCCAvenueEnv() {
  * @route   POST /api/pay/register
  * @access  Private
  */
+const testString = "test_encryption";
+const encryptedTest = encryptCCAvenue(testString, process.env.CCAVENUE_WORKING_KEY);
+console.log('Encryption Test:', {
+  input: testString,
+  encrypted: encryptedTest,
+  decrypted: encryptedTest ? decryptCCAvenue(encryptedTest, process.env.CCAVENUE_WORKING_KEY) : 'failed'
+});
+
+if (!encryptedTest) {
+  throw new Error('Encryption test failed - check working key');
+}
+
 const payRegister = async (req, res) => {
   try {
     const userMongoId = req.user?._id;
@@ -117,11 +127,11 @@ const payRegister = async (req, res) => {
       });
     }
 
-    const fixedAmount = 50.0;
+    const fixedAmount = 50.0; // Registration amount fixed at 50 AED
     const method = req.body.method?.trim().toLowerCase();
-    const paymentCurrency = 'inr';
+    const paymentCurrency = 'AED'; // Using AED for UAE
 
-    console.log('🔍 Payment Initiated (Live Mode):', {
+    console.log('💳 Payment Initiation:', {
       user: user.email,
       method: method,
       amount: fixedAmount,
@@ -146,7 +156,7 @@ const payRegister = async (req, res) => {
     }
 
     if (['bank', 'cash'].includes(method)) {
-      console.log(`💵 Processing ${method.toUpperCase()} payment for ${user.email} (Live Mode)`);
+      console.log(`💵 Processing ${method.toUpperCase()} payment for ${user.email}`);
       await authDB.updateOne(
         { _id: userMongoId },
         {
@@ -175,7 +185,6 @@ const payRegister = async (req, res) => {
       });
 
       await paymentRecord.save();
-      console.log(`✅ ${method.toUpperCase()} Payment Recorded: ${paymentRecord.payment_reference}`);
       return res.json({
         success: true,
         message: `${method === 'bank' ? 'Bank transfer' : 'Cash'} payment recorded. Awaiting admin confirmation.`,
@@ -185,50 +194,42 @@ const payRegister = async (req, res) => {
     }
 
     if (['card', 'walletcrypto'].includes(method)) {
-      console.log(`💳 Initiating ${method.toUpperCase()} payment for ${user.email} (Live Mode)`);
-      console.log('🔍 CCAvenue Credentials (Live Mode):', {
-        merchantId: process.env.CCAVENUE_MERCHANT_ID,
-        accessCode: process.env.CCAVENUE_ACCESS_CODE,
-        workingKey: process.env.CCAVENUE_WORKING_KEY.substring(0, 3) + '...' + process.env.CCAVENUE_WORKING_KEY.substring(process.env.CCAVENUE_WORKING_KEY.length - 3)
-      });
-
+      console.log(`💳 Initiating ${method.toUpperCase()} payment for ${user.email}`);
+      
       validateCCAvenueEnv();
 
       try {
         const paymentReference = `REG-${user._id}-${Date.now()}`;
         const ccavenueParams = {
           merchant_id: process.env.CCAVENUE_MERCHANT_ID,
-          order_id: paymentReference,
-          currency: paymentCurrency,
+          order_id: `REG-${user._id}-${Date.now()}`,
+          currency: 'AED',
           amount: fixedAmount.toFixed(2),
-          redirect_url: `${process.env.BASE_URL}/api/pay/callback`, // Ensure this is your live domain
-          cancel_url: `${process.env.BASE_URL}/payment-cancel.html`, // Ensure this is your live domain
-          billing_name: user.name || 'N/A',
+          redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
+          cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
+          billing_name: user.name || 'Customer',
           billing_email: user.email,
-          billing_tel: user.phone || 'N/A',
-          billing_address: user.street || 'N/A',
-          billing_city: user.city || 'N/A',
-          billing_state: user.state || 'N/A',
-          billing_zip: user.postalCode || 'N/A',
-          billing_country: user.country || 'India',
+          billing_tel: user.phone || '0000000000',
+          billing_address: user.street || 'Not Provided',
+          billing_city: user.city || 'Dubai',
+          billing_state: user.state || 'Dubai',
+          billing_zip: user.postalCode || '00000',
+          billing_country: user.country || 'UAE',
           language: 'EN',
           payment_option: method === 'card' ? 'CC' : 'WALLET'
         };
 
-        console.log('🔍 CCAvenue Parameters (Live Mode):', ccavenueParams);
         const requestData = formatCCAvenueRequest(ccavenueParams);
         const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
-        console.log('🔍 Generated encRequest (Live Mode):', encRequest);
+        
         if (!encRequest) {
-          console.error('❌ encRequest is undefined');
           return res.status(500).json({
             success: false,
             error: 'Failed to generate encrypted request'
           });
         }
 
-        const paymentUrl = `https://secure.ccavenue.com/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
-        console.log('🔍 Constructed paymentUrl (Live Mode):', paymentUrl);
+        const paymentUrl = `https://secure.ccavenue.ae/transaction/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
 
         const paymentRecord = new MemberPayment({
           payment_reference: paymentReference,
@@ -246,18 +247,7 @@ const payRegister = async (req, res) => {
           paymentUrl: paymentUrl
         });
 
-        try {
-          await paymentRecord.save();
-          console.log('🔍 Saved paymentRecord (Live Mode):', paymentRecord.toObject());
-        } catch (saveError) {
-          console.error('❌ Error saving paymentRecord:', saveError);
-          return res.status(500).json({
-            success: false,
-            error: 'Failed to save payment record',
-            details: saveError.message
-          });
-        }
-
+        await paymentRecord.save();
         await authDB.updateOne(
           { _id: userMongoId },
           {
@@ -270,7 +260,6 @@ const payRegister = async (req, res) => {
           }
         );
 
-        console.log(`✅ CCAvenue Payment URL Generated (Live Mode): ${paymentUrl}`);
         return res.json({ 
           success: true, 
           sessionId: paymentReference, 
@@ -278,7 +267,7 @@ const payRegister = async (req, res) => {
           paymentMethod: method
         });
       } catch (error) {
-        console.error('❌ CCAvenue Payment Error (Live Mode):', error.message);
+        console.error('❌ CCAvenue Payment Error:', error);
         return res.status(500).json({ 
           success: false,
           error: `Failed to initiate ${method} payment`,
@@ -287,7 +276,7 @@ const payRegister = async (req, res) => {
       }
     }
   } catch (error) {
-    console.error('❌ Payment Processing Error (Live Mode):', error.message);
+    console.error('❌ Payment Processing Error:', error);
     return res.status(500).json({ 
       success: false,
       error: 'Failed to process payment',
@@ -296,121 +285,99 @@ const payRegister = async (req, res) => {
   }
 };
 
+function validateWorkingKey(key) {
+  if (!key || typeof key !== 'string' || key.length !== 32 || !/^[0-9A-F]+$/i.test(key)) {
+    throw new Error(`Invalid working key format. Must be 32-character hex string. Got: ${key}`);
+  }
+}
+
+validateWorkingKey(process.env.CCAVENUE_WORKING_KEY);
+
 /**
  * @desc    Process investment payment
- * @route   POST /api/pay/investment
  * @access  Private
  */
-
 const payInvestment = async (req, res) => {
   try {
-    // Validate user authentication
     const userMongoId = req.user?._id;
     if (!userMongoId) {
-      console.error('🔒 Authentication Error: No user ID in request');
       return res.status(401).json({ 
         success: false,
         error: 'Unauthorized: User not authenticated' 
       });
     }
 
-    // Find user in database
     const user = await authDB.findById(userMongoId);
     if (!user) {
-      console.error(`🔍 User Not Found: ID ${userMongoId}`);
       return res.status(404).json({ 
         success: false,
         error: 'User not found' 
       });
     }
 
-    // Check if registration payment is completed
     if (user.paymentStatus !== 'success') {
-      console.warn(`⚠️ Registration Payment Incomplete: ${user.email}`);
       return res.status(403).json({
         success: false,
-        message: 'Registration payment must be completed before making an investment payment.'
+        message: 'Complete registration payment first'
       });
     }
 
-    // Validate request body
-    const { planId, amount, method, currency } = req.body;
-    if (!planId || !amount || !method) {
-      console.error('🚫 Missing Required Fields:', { planId, amount, method });
+    let { method } = req.body;
+
+    if (!method) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Missing required fields: planId, amount, or method' 
+        message: 'Payment method is required' 
       });
     }
 
-    // Find plan
+    const pendingInvestment = await Investment.findOne({ userId: userMongoId, status: 'pending' });
+
+    if (!pendingInvestment) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No pending investment found. Please select a plan first.' 
+      });
+    }
+
+    const planId = pendingInvestment.planId;
+    const amount = pendingInvestment.amount;
+
     const plan = await InvestmentPlan.findById(planId);
     if (!plan) {
-      console.error(`🔍 Investment Plan Not Found: ID ${planId}`);
       return res.status(404).json({ 
         success: false,
-        error: 'Investment plan not found' 
+        error: 'Plan not found' 
       });
     }
 
-    // Validate amount against plan limits
-    if (amount < plan.minAmount) {
-      console.error(`🚫 Amount Below Minimum: ${amount} < ${plan.minAmount}`);
+    if (amount < plan.minAmount || (plan.maxAmount && amount > plan.maxAmount)) {
       return res.status(400).json({ 
         success: false, 
-        message: `Minimum investment amount is $${plan.minAmount}` 
+        message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount || '∞'}` 
       });
     }
 
-    if (plan.maxAmount && amount > plan.maxAmount) {
-      console.error(`🚫 Amount Above Maximum: ${amount} > ${plan.maxAmount}`);
-      return res.status(400).json({ 
-        success: false, 
-        message: `Maximum investment amount is $${plan.maxAmount}` 
-      });
-    }
-
-    // Create investment record
-    const investment = new Investment({
-      userId: userMongoId,
-      planId,
-      amount,
-      nextPayoutDate: calculateNextPayoutDate(),
-      totalPayouts: plan.durationMonths,
-      status: 'pending',
-      createdAt: new Date()
-    });
-
-    // Validate payment method
     const paymentMethod = method.toLowerCase();
     const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
     if (!validMethods.includes(paymentMethod)) {
-      console.error(`🚫 Invalid Payment Method: ${paymentMethod}`);
       return res.status(400).json({ 
         success: false,
-        error: `Invalid payment method: ${paymentMethod}` 
+        error: `Invalid payment method` 
       });
     }
 
-    console.log('🔍 Investment Payment Initiated:', {
-      user: user.email,
-      plan: plan.name,
-      method: paymentMethod,
-      amount: amount,
-      currency: currency || 'INR'
-    });
+    const investment = pendingInvestment;
+    investment.updatedAt = new Date();
 
-    // Handle Bank or Cash payment
     if (['bank', 'cash'].includes(paymentMethod)) {
-      console.log(`💰 Processing ${paymentMethod.toUpperCase()} investment for ${user.email}`);
-      
       await investment.save();
 
       const paymentRecord = new MemberPayment({
         payment_reference: `${paymentMethod.toUpperCase()}-INV-${Date.now()}`,
         userId: user._id,
         amount: amount,
-        currency: 'INR',
+        currency: 'AED',
         customer: {
           name: user.name,
           email: user.email,
@@ -423,56 +390,51 @@ const payInvestment = async (req, res) => {
       });
 
       await paymentRecord.save();
-
-      console.log(`✅ ${paymentMethod.toUpperCase()} Investment Recorded: ${paymentRecord.payment_reference}`);
       return res.json({
         success: true,
-        message: `${paymentMethod === 'bank' ? 'Bank transfer' : 'Cash'} investment recorded. Awaiting admin confirmation.`,
+        message: `${paymentMethod} payment recorded`,
         paymentId: paymentRecord._id,
-        investmentId: investment._id,
-        paymentMethod: paymentMethod
+        investmentId: investment._id
       });
     }
 
-    // Handle Card or Wallet payment (CCAvenue)
     if (['card', 'walletcrypto'].includes(paymentMethod)) {
-      console.log(`💳 Initiating ${paymentMethod.toUpperCase()} investment for ${user.email}`);
-      
-      // Validate CCAvenue environment variables
       validateCCAvenueEnv();
 
       try {
         const paymentReference = `INV-${user._id}-${Date.now()}`;
         const ccavenueParams = {
           merchant_id: process.env.CCAVENUE_MERCHANT_ID,
-          order_id: paymentReference,
-          currency: 'INR',
+          access_code: process.env.CCAVENUE_ACCESS_CODE,
+          order_id: `INV-${user._id}-${Date.now()}`,
+          currency: 'AED',
           amount: amount.toFixed(2),
           redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
           cancel_url: `${process.env.BASE_URL}/payment-cancel.html`,
-          billing_name: user.name || 'N/A',
+          billing_name: user.name || 'Customer',
           billing_email: user.email,
-          billing_tel: user.phone || 'N/A',
-          billing_address: user.street || 'N/A',
-          billing_city: user.city || 'N/A',
-          billing_state: user.state || 'N/A',
-          billing_zip: user.postalCode || 'N/A',
-          billing_country: user.country || 'India',
+          billing_tel: user.phone || '0000000000',
+          billing_address: user.street || 'Not Provided',
+          billing_city: user.city || 'Dubai',
+          billing_state: user.state || 'Dubai',
+          billing_zip: user.postalCode || '00000',
+          billing_country: user.country || 'UAE',
           language: 'EN',
-          payment_option: paymentMethod === 'card' ? 'CC' : 'WALLET'
+          payment_option: method === 'card' ? 'CC' : 'WALLET'
         };
 
-        // Encrypt request data
         const requestData = formatCCAvenueRequest(ccavenueParams);
         const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
 
         await investment.save();
 
+        const paymentUrl = `https://secure.ccavenue.ae/transaction/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
+
         const paymentRecord = new MemberPayment({
           payment_reference: paymentReference,
           userId: user._id,
           amount: amount,
-          currency: 'INR',
+          currency: 'AED',
           customer: {
             name: user.name,
             email: user.email,
@@ -482,35 +444,31 @@ const payInvestment = async (req, res) => {
           paymentMethod: paymentMethod,
           paymentType: 'investment',
           investmentId: investment._id,
-          paymentUrl: `https://test.ccavenue.com/transaction/transaction.do?command=initiateTransaction&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`
+          paymentUrl: paymentUrl
         });
 
         await paymentRecord.save();
-
-        console.log(`✅ CCAvenue Payment URL Generated: ${paymentRecord.paymentUrl}`);
         return res.json({ 
           success: true, 
           sessionId: paymentReference, 
-          url: paymentRecord.paymentUrl,
+          url: paymentUrl,
           paymentMethod: paymentMethod,
           investmentId: investment._id
         });
-
       } catch (error) {
-        console.error('❌ CCAvenue Payment Error:', error.message);
+        console.error('❌ CCAvenue Payment Error:', error);
         return res.status(500).json({ 
           success: false,
-          error: `Failed to initiate ${paymentMethod} payment`,
+          error: `Payment initiation failed`,
           details: error.message
         });
       }
     }
-
   } catch (error) {
-    console.error('❌ Investment Payment Error:', error.message);
+    console.error('❌ Investment Payment Error:', error);
     return res.status(500).json({ 
       success: false,
-      error: 'Failed to process investment payment',
+      error: 'Payment processing failed',
       details: error.message
     });
   }
@@ -525,53 +483,30 @@ const callback = async (req, res) => {
   try {
     const encResp = req.body.encResp;
     if (!encResp) {
-      console.error('🚫 Missing encResp in CCAvenue Callback');
       return res.status(400).json({ 
         success: false,
-        message: 'Missing encrypted response'
+        message: 'Missing encrypted response' 
       });
     }
 
-    console.log('📥 CCAvenue Callback Received:', { encResp });
-
-
-
     validateCCAvenueEnv();
-
-
-
-    // Decrypt response
     const decryptedResponse = decryptCCAvenue(encResp, process.env.CCAVENUE_WORKING_KEY);
     const responseParams = new URLSearchParams(decryptedResponse);
     const responseData = Object.fromEntries(responseParams);
 
     const { order_id, order_status, amount, currency, payment_mode } = responseData;
 
-    console.log('📥 Payment Callback Data:', {
-      paymentId: order_id,
-      status: order_status,
-      amount: parseFloat(amount),
-      currency,
-      paymentMode: payment_mode
-    });
-
-    // Only process successful payments
     if (order_status !== 'Success') {
-      console.log(`ℹ️ Non-Successful Payment Callback: ${order_status}`);
       return res.status(200).send('IPN received - payment not successful');
     }
 
     const payment = await MemberPayment.findOneAndUpdate(
       { payment_reference: order_id },
-      { 
-        status: 'success',
-        updatedAt: new Date()
-      },
+      { status: 'success', updatedAt: new Date() },
       { new: true }
     );
 
     if (!payment) {
-      console.error(`❌ Payment Record Not Found: ${order_id}`);
       return res.status(404).send('Payment record not found');
     }
 
@@ -580,7 +515,6 @@ const callback = async (req, res) => {
       if (!user.userId) {
         user.userId = await generateNextUserId();
       }
-
       user.paymentStatus = 'success';
       user.paymentMethod = payment.paymentMethod;
       user.transactionId = order_id;
@@ -593,15 +527,66 @@ const callback = async (req, res) => {
         const investment = await Investment.findById(payment.investmentId);
         if (investment) {
           investment.status = 'active';
+          investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
           investment.updatedAt = new Date();
           await investment.save();
+
+          // Create ROI and Return records for investment
+          try {
+            const plan = await InvestmentPlan.findById(investment.planId);
+            if (!plan) {
+              console.error('❌ Plan not found for investment:', investment._id);
+              throw new Error('Plan not found');
+            }
+
+            // Create ROI record using InvestmentPlan.returnRate
+            const returnRate = plan.returnRate;
+const investmentAmount = investment.amount;
+const payoutOption = investment.payoutOption || 'monthly';
+
+const monthlyReturnAmount = payoutOption === 'monthly'
+  ? (investmentAmount * returnRate) / 100
+  : 0;
+
+const annualReturnAmount = payoutOption === 'monthly'
+  ? monthlyReturnAmount * 12
+  : (investmentAmount * returnRate) / 100;
+
+await Roi.findOneAndUpdate(
+  { userId: user._id, investmentId: investment._id },
+  {
+    returnRate,
+    monthlyReturnAmount,
+    annualReturnAmount,
+    updatedAt: new Date()
+  },
+  { upsert: true, new: true }
+);
+
+console.log(`📊 ROI saved: Rate = ${returnRate}%, Monthly = ${monthlyReturnAmount}, Annual = ${annualReturnAmount}`);
+
+            console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
+
+            // Create initial Return record
+            const returnAmount = calculateReturnAmount(investment.amount, plan.returnRate);
+            const nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
+            await Return.create({
+              userId: user._id,
+              investmentId: investment._id,
+              amount: returnAmount,
+              payoutDate: nextPayoutDate,
+              status: 'pending'
+            });
+            console.log(`💰 Return scheduled: $${returnAmount} for ${investment.payoutOption} payout`);
+          } catch (error) {
+            console.error('❌ ROI/Return Assignment Error:', error.message);
+          }
         }
       }
 
       const orderDescription = payment.investmentId
-        ? `Prime Bond ${(await InvestmentPlan.findById((await Investment.findById(payment.investmentId)).planId)).name} Investment`
-        : 'Prime Bond Registration';
-
+        ? `Investment in ${(await InvestmentPlan.findById((await Investment.findById(payment.investmentId)).planId)).name}`
+        : 'Registration Payment';
       await generateAndSendReceipt({
         payment_id: order_id,
         updated_at: new Date().toISOString(),
@@ -618,14 +603,11 @@ const callback = async (req, res) => {
         addressLine1: user.street || '-',
         addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
       });
-
-      console.log(`✅ Payment Processed Successfully for ${user.email}: ${order_id}`);
     }
 
     res.redirect(`${process.env.BASE_URL}/payment-success.html?order_id=${order_id}`);
-
   } catch (error) {
-    console.error('❌ CCAvenue Callback Error:', error.message);
+    console.error('❌ Callback Error:', error);
     res.status(500).json({ 
       success: false,
       message: 'Callback processing failed',

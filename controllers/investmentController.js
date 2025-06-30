@@ -1,6 +1,8 @@
 const InvestmentPlan = require('../models/InvestmentPlan');
 const Investment = require('../models/Investment');
 const Return = require('../models/Return');
+const authDB = require('../models/auth_schema');
+const { calculateNextPayoutDate } = require('../utils/calculateReturn'); // Add this import
 
 const getPlans = async (req, res) => {
   try {
@@ -42,7 +44,6 @@ const getUserReturns = async (req, res) => {
   }
 };
 
-
 const createInvestmentPlan = async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -83,6 +84,87 @@ const createInvestmentPlan = async (req, res) => {
   }
 };
 
+const selectPlan = async (req, res) => {
+  try {
+    const userId = req.user._id;
+const { planId, amount, payoutOption } = req.body; // Get payoutOption from user input
+
+    if (!planId) {
+      return res.status(400).json({ Success: false, Message: 'Plan ID is required' });
+    }
+
+    if (!amount) {
+      return res.status(400).json({ Success: false, Message: 'Amount is required' });
+    }
+
+    const plan = await InvestmentPlan.findById(planId);
+    if (!plan || !plan.active) {
+      return res.status(404).json({ Success: false, Message: 'Plan not found or inactive' });
+    }
+
+    if (amount < plan.minAmount || (plan.maxAmount && amount > plan.maxAmount)) {
+      return res.status(400).json({ 
+        Success: false, 
+        Message: `Amount must be between $${plan.minAmount} and $${plan.maxAmount || '∞'}` 
+      });
+    }
+
+    const user = await authDB.findById(userId);
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
+    }
+
+    if (user.paymentStatus !== 'success') {
+      return res.status(403).json({ Success: false, Message: 'Complete registration payment first' });
+    }
+
+user.selectedPlanId = planId;
+user.selectedInvestmentAmount = Number(amount);
+user.selectedPlanName = plan.name; // ✅ Add plan name
+await user.save();
 
 
-module.exports = { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan };
+
+    // Create a pending investment
+    let investment = await Investment.findOne({ userId, status: 'pending' });
+
+if (investment) {
+  // Update existing pending investment
+  investment.planId = planId;
+  investment.amount = amount;
+investment.nextPayoutDate = null; // ❌ Don't set it here
+investment.payoutOption = ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly';
+
+  investment.totalPayouts = plan.durationMonths;
+  investment.updatedAt = new Date();
+  await investment.save();
+} else {
+  // Create new investment if none exists
+investment = new Investment({
+  userId,
+  planId,
+  amount,
+  payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly', // ✅ Add this line
+  totalPayouts: plan.durationMonths,
+  status: 'pending',
+  createdAt: new Date()
+});
+
+  await investment.save();
+}
+
+
+    res.json({ 
+      Success: true, 
+      Message: 'Plan selected and investment created successfully', 
+      plan,
+      investmentId: investment._id 
+    });
+  } catch (error) {
+    console.error('❌ Select Plan Error:', error);
+    res.status(500).json({ Success: false, Message: 'Internal Server Error', error: error.message });
+  }
+};
+
+
+module.exports = { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan, selectPlan };
