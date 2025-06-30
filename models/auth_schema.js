@@ -45,14 +45,13 @@ const UserSchema = new mongoose.Schema({
     type: String
   },
   resetToken: {
-  type: String,
-  default: null
-},
-resetTokenExpiry: {
-  type: Date,
-  default: null
-},
-
+    type: String,
+    default: null
+  },
+  resetTokenExpiry: {
+    type: Date,
+    default: null
+  },
   unit: {
     type: String
   },
@@ -80,7 +79,7 @@ resetTokenExpiry: {
   },
   paymentMethod: {
     type: String,
-    enum: ['bank','cash', 'card', 'walletcrypto', null],
+    enum: ['bank', 'cash', 'card', 'walletcrypto', null],
     default: null
   },
   transactionId: {
@@ -109,6 +108,22 @@ resetTokenExpiry: {
     enum: ['user', 'admin'],
     default: 'user'
   },
+selectedPlanId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'InvestmentPlan',
+  default: null
+},
+selectedInvestmentAmount: {
+  type: Number,
+  default: 0
+},
+
+
+selectedPlanName: {
+  type: String,
+  default: null
+},
+
   createdAt: {
     type: Date,
     default: Date.now
