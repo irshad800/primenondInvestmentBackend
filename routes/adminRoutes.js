@@ -3,20 +3,26 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 dotenv.config();
-const { confirmPayment, updateKycStatus } = require('../controllers/adminController');
 
+const {
+  confirmPayment,
+  updateKycStatus,
+  getAllInvestments,
+  getAllRois,
+  getAllReturns,
+  withdrawRoi,
+  getDashboardStats
+} = require('../controllers/adminController');
+
+const { ensureAuth } = require('../middleware/authMiddleware');
+
+// Admin Login (no token required)
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
 
   const adminCredentials = [
-    {
-      username: process.env.ADMIN1_USERNAME,
-      password: process.env.ADMIN1_PASSWORD
-    },
-    {
-      username: process.env.ADMIN2_USERNAME,
-      password: process.env.ADMIN2_PASSWORD
-    }
+    { username: process.env.ADMIN1_USERNAME, password: process.env.ADMIN1_PASSWORD },
+    { username: process.env.ADMIN2_USERNAME, password: process.env.ADMIN2_PASSWORD }
   ];
 
   const admin = adminCredentials.find(
@@ -36,7 +42,20 @@ router.post('/login', (req, res) => {
   });
 });
 
-router.post('/confirm-payment', confirmPayment);
-router.post('/kyc/update-status', updateKycStatus);
+// Protect all admin routes with ensureAuth + role check
+const adminOnly = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Admin access only' });
+  }
+  next();
+};
+
+router.post('/confirm-payment', ensureAuth, adminOnly, confirmPayment);
+router.post('/kyc/update-status', ensureAuth, adminOnly, updateKycStatus);
+router.get('/all-investments', ensureAuth, adminOnly, getAllInvestments);
+router.get('/all-rois', ensureAuth, adminOnly, getAllRois);
+router.get('/all-returns', ensureAuth, adminOnly, getAllReturns);
+router.post('/withdraw-roi', ensureAuth, adminOnly, withdrawRoi);
+router.get('/dashboard-stats', ensureAuth, adminOnly, getDashboardStats);
 
 module.exports = router;
