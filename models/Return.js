@@ -9,4 +9,5 @@ const ReturnSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('Return', ReturnSchema);
+// ✅ Safe export to prevent OverwriteModelError
+module.exports = mongoose.models.Return || mongoose.model('Return', ReturnSchema);
