@@ -55,8 +55,19 @@ const confirmPayment = async (req, res) => {
 
     const payment = await MemberPayment.findOne(paymentQuery);
 
+    // Check if payment is already confirmed
     if (!payment) {
+      const completedPayment = await MemberPayment.findOne({ userId: user._id, paymentType, investmentId, status: 'success' });
+      if (completedPayment) {
+        return res.status(400).json({ success: false, message: 'Payment already confirmed' });
+      }
       return res.status(404).json({ success: false, message: 'No pending payment found' });
+    }
+
+    // Ensure paymentType is consistent (update if missing or invalid)
+    const validPaymentTypes = ['registration', 'investment', 'roi'];
+    if (!payment.paymentType || !validPaymentTypes.includes(payment.paymentType)) {
+      payment.paymentType = paymentType; // Set or correct paymentType
     }
 
     // Update payment status
@@ -109,7 +120,7 @@ const confirmPayment = async (req, res) => {
           payoutDate: nextPayoutDate,
           status: 'pending'
         });
-        console.log(`💰 Return scheduled: $${returnAmount} for ${investment.payoutOption} payout`);
+        console.log(`💰 Return scheduled: ${returnAmount} for ${investment.payoutOption} payout`);
       } catch (error) {
         console.error('❌ ROI/Return Assignment Error:', error.message);
       }
@@ -121,7 +132,7 @@ const confirmPayment = async (req, res) => {
     // Generate receipt data
     const receiptData = {
       payment_id: payment.payment_reference,
-      pay_currency: payment.currency || 'usd',
+      pay_currency: payment.currency || 'AED',
       price_amount: payment.amount,
       payment_status: 'success',
       payment_method: paymentMethod.toUpperCase(),
@@ -303,22 +314,29 @@ const withdrawRoi = async (req, res) => {
 
     // Update return record
     returnRecord.status = 'paid';
-    returnRecord.payoutDate = new Date();
+    returnRecord.paidAt = new Date();
     await returnRecord.save();
+
+    // Update ROI payment tracking
+    const returnAmount = returnRecord.amount;
+    roi.totalRoiPaid += returnAmount;
+    roi.payoutsMade += 1;
+    roi.lastPayoutDate = new Date();
+    await roi.save();
 
     // Update investment payouts
     investment.payoutsMade += 1;
     if (investment.payoutsMade >= investment.totalPayouts) {
       investment.status = 'completed';
     }
-    investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
+    investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption, new Date());
     await investment.save();
 
     // Create payment record
     const paymentRecord = new MemberPayment({
       payment_reference: `ROI-${user._id}-${Date.now()}`,
       userId: user._id,
-      amount: returnRecord.amount,
+      amount: returnAmount,
       currency: 'AED',
       customer: {
         name: user.name,
@@ -337,7 +355,7 @@ const withdrawRoi = async (req, res) => {
     const receiptData = {
       payment_id: paymentRecord.payment_reference,
       pay_currency: 'AED',
-      price_amount: returnRecord.amount,
+      price_amount: returnAmount,
       payment_status: 'success',
       payment_method: paymentMethod.toUpperCase(),
       updated_at: new Date(),
@@ -363,9 +381,10 @@ const withdrawRoi = async (req, res) => {
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.6;">
           <p>Dear ${user.name},</p>
-          <p>Your ROI withdrawal of ${returnRecord.amount} AED for investment in ${investment.planId.name} has been processed successfully.</p>
+          <p>Your ROI withdrawal of ${returnAmount} AED for investment in ${investment.planId.name} has been processed successfully.</p>
           <p>Payment Method: ${paymentMethod.toUpperCase()}</p>
           <p>Transaction Reference: ${paymentRecord.payment_reference}</p>
+          <p>Next Payout Date: ${investment.nextPayoutDate.toLocaleDateString()}</p>
           <p>Please check your account for the funds. If you have any questions, contact support at support@primebond.com.</p>
         </div>
       `,
@@ -389,8 +408,9 @@ const withdrawRoi = async (req, res) => {
       data: {
         paymentId: paymentRecord._id,
         returnId: returnRecord._id,
-        amount: returnRecord.amount,
-        paymentMethod
+        amount: returnAmount,
+        paymentMethod,
+        nextPayoutDate: investment.nextPayoutDate
       }
     });
   } catch (error) {
@@ -406,10 +426,10 @@ const getDashboardStats = async (req, res) => {
       { $match: { paymentType: { $in: ['registration', 'investment'] }, status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).then(result => result[0]?.total || 0);
-const totalInvested = await Investment.aggregate([
-  { $match: { status: 'active' } }, // ✅ Only count active investments
-  { $group: { _id: null, total: { $sum: '$amount' } } }
-]).then(result => result[0]?.total || 0);
+    const totalInvested = await Investment.aggregate([
+      { $match: { status: 'active' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]).then(result => result[0]?.total || 0);
 
     const totalRoiPaid = await Return.aggregate([
       { $match: { status: 'paid' } },
@@ -431,14 +451,14 @@ const totalInvested = await Investment.aggregate([
       ? (((totalDeposits - prevMonthDeposits) / prevMonthDeposits) * 100).toFixed(2) 
       : 0;
     const investedGrowthRate = investments.length > 0 
-  ? (((totalInvested - (await Investment.aggregate([
-      { $match: { status: 'active', updatedAt: { $lt: lastMonth } } },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]).then(result => result[0]?.total || 0))) / totalInvested) * 100).toFixed(2) 
-  : 0;
+      ? (((totalInvested - (await Investment.aggregate([
+          { $match: { status: 'active', updatedAt: { $lt: lastMonth } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]).then(result => result[0]?.total || 0))) / totalInvested) * 100).toFixed(2) 
+      : 0;
 
     const capitalGainsIncrease = totalRoiPaid > 0 
-      ? (((totalRoiPaid - (await Return.aggregate([{ $match: { payoutDate: { $lt: lastMonth }, status: 'paid' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]).then(result => result[0]?.total || 0))) / totalRoiPaid) * 100).toFixed(2) 
+      ? (((totalRoiPaid - (await Return.aggregate([{ $match: { paidAt: { $lt: lastMonth }, status: 'paid' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]).then(result => result[0]?.total || 0))) / totalRoiPaid) * 100).toFixed(2) 
       : 0;
 
     // Technical Support (KYC approved users)

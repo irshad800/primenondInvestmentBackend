@@ -219,7 +219,7 @@ const payRegister = async (req, res) => {
           payment_option: method === 'card' ? 'CC' : 'WALLET'
         };
 
-        const requestData = formatCCAvenueRequest(ccavenueParams);
+        const requestData = formatCCAvenueOrderRequest(ccavenueParams);
         const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
         
         if (!encRequest) {
@@ -328,6 +328,15 @@ const payInvestment = async (req, res) => {
       return res.status(400).json({ 
         success: false, 
         message: 'Payment method is required' 
+      });
+    }
+
+    // Check if user has a successful investment payment
+    const successfulInvestmentPayment = await MemberPayment.findOne({ userId: userMongoId, paymentType: 'investment', status: 'success' });
+    if (successfulInvestmentPayment) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'You have already completed an investment payment. No further payments are allowed.' 
       });
     }
 
@@ -541,29 +550,29 @@ const callback = async (req, res) => {
 
             // Create ROI record using InvestmentPlan.returnRate
             const returnRate = plan.returnRate;
-const investmentAmount = investment.amount;
-const payoutOption = investment.payoutOption || 'monthly';
+            const investmentAmount = investment.amount;
+            const payoutOption = investment.payoutOption || 'monthly';
 
-const monthlyReturnAmount = payoutOption === 'monthly'
-  ? (investmentAmount * returnRate) / 100
-  : 0;
+            const monthlyReturnAmount = payoutOption === 'monthly'
+              ? (investmentAmount * returnRate) / 100
+              : 0;
 
-const annualReturnAmount = payoutOption === 'monthly'
-  ? monthlyReturnAmount * 12
-  : (investmentAmount * returnRate) / 100;
+            const annualReturnAmount = payoutOption === 'monthly'
+              ? monthlyReturnAmount * 12
+              : (investmentAmount * returnRate) / 100;
 
-await Roi.findOneAndUpdate(
-  { userId: user._id, investmentId: investment._id },
-  {
-    returnRate,
-    monthlyReturnAmount,
-    annualReturnAmount,
-    updatedAt: new Date()
-  },
-  { upsert: true, new: true }
-);
+            await Roi.findOneAndUpdate(
+              { userId: user._id, investmentId: investment._id },
+              {
+                returnRate,
+                monthlyReturnAmount,
+                annualReturnAmount,
+                updatedAt: new Date()
+              },
+              { upsert: true, new: true }
+            );
 
-console.log(`📊 ROI saved: Rate = ${returnRate}%, Monthly = ${monthlyReturnAmount}, Annual = ${annualReturnAmount}`);
+            console.log(`📊 ROI saved: Rate = ${returnRate}%, Monthly = ${monthlyReturnAmount}, Annual = ${annualReturnAmount}`);
 
             console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
 
@@ -581,6 +590,13 @@ console.log(`📊 ROI saved: Rate = ${returnRate}%, Monthly = ${monthlyReturnAmo
           } catch (error) {
             console.error('❌ ROI/Return Assignment Error:', error.message);
           }
+
+          // Update auth_schema with specific plan details after successful investment payment
+          user.selectedPlanId = '685274fe90dc45ccb6268f32'; // Hardcoded as requested
+          user.selectedInvestmentAmount = 30000; // Hardcoded as requested
+          user.selectedPlanName = 'Prime Bond Investment – Tier 5'; // Hardcoded as requested
+          await user.save();
+          console.log(`📝 Updated auth_schema for user ${user._id} with selectedPlanId: 685274fe90dc45ccb6268f32, selectedInvestmentAmount: 30000, selectedPlanName: Prime Bond Investment – Tier 5`);
         }
       }
 

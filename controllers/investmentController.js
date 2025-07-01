@@ -2,7 +2,8 @@ const InvestmentPlan = require('../models/InvestmentPlan');
 const Investment = require('../models/Investment');
 const Return = require('../models/Return');
 const authDB = require('../models/auth_schema');
-const { calculateNextPayoutDate } = require('../utils/calculateReturn'); // Add this import
+const MemberPayment = require('../models/MemberPaymentSchema'); // Add this import
+const { calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 const getPlans = async (req, res) => {
   try {
@@ -87,7 +88,7 @@ const createInvestmentPlan = async (req, res) => {
 const selectPlan = async (req, res) => {
   try {
     const userId = req.user._id;
-const { planId, amount, payoutOption } = req.body; // Get payoutOption from user input
+    const { planId, amount, payoutOption } = req.body; // Get payoutOption from user input
 
     if (!planId) {
       return res.status(400).json({ Success: false, Message: 'Plan ID is required' });
@@ -118,41 +119,54 @@ const { planId, amount, payoutOption } = req.body; // Get payoutOption from user
       return res.status(403).json({ Success: false, Message: 'Complete registration payment first' });
     }
 
-user.selectedPlanId = planId;
-user.selectedInvestmentAmount = Number(amount);
-user.selectedPlanName = plan.name; // ✅ Add plan name
-await user.save();
+    // Check if user already has an active investment
+    const activeInvestment = await Investment.findOne({ userId, status: 'active' });
+    if (activeInvestment) {
+      return res.status(400).json({ 
+        Success: false, 
+        Message: 'You already have an active investment. No further selections are allowed.' 
+      });
+    }
 
+    // Check if user has a successful investment payment
+    const successfulInvestmentPayment = await MemberPayment.findOne({ userId, paymentType: 'investment', status: 'success' });
+    if (successfulInvestmentPayment) {
+      return res.status(400).json({ 
+        Success: false, 
+        Message: 'You have already paid for an investment. No further selections are allowed.' 
+      });
+    }
 
+    user.selectedPlanId = planId;
+    user.selectedInvestmentAmount = Number(amount);
+    user.selectedPlanName = plan.name; // ✅ Add plan name
+    await user.save();
 
-    // Create a pending investment
+    // Create or update a pending investment
     let investment = await Investment.findOne({ userId, status: 'pending' });
 
-if (investment) {
-  // Update existing pending investment
-  investment.planId = planId;
-  investment.amount = amount;
-investment.nextPayoutDate = null; // ❌ Don't set it here
-investment.payoutOption = ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly';
-
-  investment.totalPayouts = plan.durationMonths;
-  investment.updatedAt = new Date();
-  await investment.save();
-} else {
-  // Create new investment if none exists
-investment = new Investment({
-  userId,
-  planId,
-  amount,
-  payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly', // ✅ Add this line
-  totalPayouts: plan.durationMonths,
-  status: 'pending',
-  createdAt: new Date()
-});
-
-  await investment.save();
-}
-
+    if (investment) {
+      // Update existing pending investment
+      investment.planId = planId;
+      investment.amount = amount;
+      investment.nextPayoutDate = null; // ❌ Don't set it here
+      investment.payoutOption = ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly';
+      investment.totalPayouts = plan.durationMonths;
+      investment.updatedAt = new Date();
+      await investment.save();
+    } else {
+      // Create new investment if none exists
+      investment = new Investment({
+        userId,
+        planId,
+        amount,
+        payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly', // ✅ Add this line
+        totalPayouts: plan.durationMonths,
+        status: 'pending',
+        createdAt: new Date()
+      });
+      await investment.save();
+    }
 
     res.json({ 
       Success: true, 
@@ -165,6 +179,5 @@ investment = new Investment({
     res.status(500).json({ Success: false, Message: 'Internal Server Error', error: error.message });
   }
 };
-
 
 module.exports = { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan, selectPlan };
