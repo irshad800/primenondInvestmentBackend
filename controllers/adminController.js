@@ -1,3 +1,4 @@
+// adminController.js
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
@@ -8,12 +9,12 @@ const Kyc = require('../models/Kyc');
 const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes');
 const { transporter } = require('../utils/emailService');
 const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
+const crypto = require('crypto');
 
 const confirmPayment = async (req, res) => {
   try {
     const { identifier, paymentType, paymentMethod, adminPassword, investmentId } = req.body;
 
-    // Validate admin credentials
     const admin = [
       process.env.ADMIN1_PASSWORD,
       process.env.ADMIN2_PASSWORD
@@ -23,12 +24,10 @@ const confirmPayment = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
-    // Validate input
     if (!identifier || !paymentType || !paymentMethod) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // Find user by email or other identifiers (phone, passportNumber, username)
     const user = await authDB.findOne({
       $or: [
         { email: identifier },
@@ -42,7 +41,6 @@ const confirmPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Find pending payment
     let paymentQuery = {
       userId: user._id,
       status: 'pending',
@@ -55,7 +53,6 @@ const confirmPayment = async (req, res) => {
 
     const payment = await MemberPayment.findOne(paymentQuery);
 
-    // Check if payment is already confirmed
     if (!payment) {
       const completedPayment = await MemberPayment.findOne({ userId: user._id, paymentType, investmentId, status: 'success' });
       if (completedPayment) {
@@ -64,17 +61,14 @@ const confirmPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'No pending payment found' });
     }
 
-    // Ensure paymentType is consistent (update if missing or invalid)
     const validPaymentTypes = ['registration', 'investment', 'roi'];
     if (!payment.paymentType || !validPaymentTypes.includes(payment.paymentType)) {
-      payment.paymentType = paymentType; // Set or correct paymentType
+      payment.paymentType = paymentType;
     }
 
-    // Update payment status
     payment.status = 'success';
     await payment.save();
 
-    // Update user
     if (!user.userId) {
       user.userId = await generateNextUserId();
     }
@@ -82,7 +76,6 @@ const confirmPayment = async (req, res) => {
     user.paymentMethod = paymentMethod;
     await user.save();
 
-    // Update investment if applicable
     let orderDescription = 'Prime Bond Registration';
     if (paymentType === 'investment' && investmentId) {
       const investment = await Investment.findById(investmentId);
@@ -94,7 +87,6 @@ const confirmPayment = async (req, res) => {
       investment.updatedAt = new Date();
       await investment.save();
 
-      // Create ROI and Return records
       try {
         const plan = await InvestmentPlan.findById(investment.planId);
         if (!plan) {
@@ -102,7 +94,6 @@ const confirmPayment = async (req, res) => {
           throw new Error('Plan not found');
         }
 
-        // Create ROI record using InvestmentPlan.returnRate
         await Roi.findOneAndUpdate(
           { userId: user._id, investmentId: investment._id },
           { returnRate: plan.returnRate, updatedAt: new Date() },
@@ -110,7 +101,6 @@ const confirmPayment = async (req, res) => {
         );
         console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
 
-        // Create initial Return record
         const returnAmount = calculateReturnAmount(investment.amount, plan.returnRate);
         const nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
         await Return.create({
@@ -129,7 +119,6 @@ const confirmPayment = async (req, res) => {
       orderDescription = `Prime Bond ${plan.name} Investment`;
     }
 
-    // Generate receipt data
     const receiptData = {
       payment_id: payment.payment_reference,
       pay_currency: payment.currency || 'AED',
@@ -141,7 +130,6 @@ const confirmPayment = async (req, res) => {
       order_description: orderDescription
     };
 
-    // Generate and send receipt
     await generateAndSendReceipt(receiptData, user.email, user.name, {
       userId: user.userId,
       phone: user.phone,
@@ -162,7 +150,6 @@ const updateKycStatus = async (req, res) => {
   try {
     const { kycId, status, adminPassword, message } = req.body;
 
-    // Validate admin credentials
     const admin = [
       process.env.ADMIN1_PASSWORD,
       process.env.ADMIN2_PASSWORD
@@ -172,22 +159,18 @@ const updateKycStatus = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
-    // Validate input
     if (!kycId || !status || !['approved', 'rejected', 'pending'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid KYC ID or status' });
     }
 
-    // Find KYC record
     const kyc = await Kyc.findById(kycId).populate('userId', 'email name');
     if (!kyc) {
       return res.status(404).json({ success: false, message: 'KYC record not found' });
     }
 
-    // Update KYC status
     kyc.status = status;
     await kyc.save();
 
-    // Send email notification to user
     const capitalizedStatus = status.charAt(0).toUpperCase() + status.slice(1);
     const mailOptions = {
       from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
@@ -214,7 +197,6 @@ const updateKycStatus = async (req, res) => {
       console.log(`✅ KYC status email sent to ${kyc.userId.email}. Message ID: ${info.messageId}`);
     } catch (err) {
       console.error('❌ Failed to send KYC status email:', err.message);
-      // Don't fail the request if email fails, just log it
     }
 
     res.json({
@@ -250,7 +232,9 @@ const getAllRois = async (req, res) => {
 
 const getAllReturns = async (req, res) => {
   try {
-    const returns = await Return.find().populate('userId', 'name email userId').populate('investmentId');
+    const returns = await Return.find()
+      .populate('userId', 'name email userId') // Populate specific user fields
+      .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade'); // Populate specific investment fields
     res.json({ success: true, returns });
   } catch (error) {
     console.error('❌ Admin Get All Returns Error:', error);
@@ -260,9 +244,8 @@ const getAllReturns = async (req, res) => {
 
 const withdrawRoi = async (req, res) => {
   try {
-    const { userId, investmentId, returnId, adminPassword, paymentMethod } = req.body;
+    const { userId, investmentId, returnId, adminPassword } = req.body;
 
-    // Validate admin credentials
     const admin = [
       process.env.ADMIN1_PASSWORD,
       process.env.ADMIN2_PASSWORD
@@ -272,59 +255,48 @@ const withdrawRoi = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
-    // Validate input
-    if (!userId || !investmentId || !returnId || !paymentMethod) {
+    if (!userId || !investmentId || !returnId) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // Validate payment method
-    const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
-    if (!validMethods.includes(paymentMethod)) {
-      return res.status(400).json({ success: false, message: `Invalid payment method: ${paymentMethod}` });
-    }
-
-    // Find user
     const user = await authDB.findById(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Find investment
+    if (!user.roiPayoutMethod) {
+      return res.status(400).json({ success: false, message: 'User has not set an ROI payout method' });
+    }
+
     const investment = await Investment.findById(investmentId).populate('planId');
     if (!investment) {
       return res.status(404).json({ success: false, message: 'Investment not found' });
     }
 
-    // Find return record
     const returnRecord = await Return.findById(returnId);
     if (!returnRecord) {
       return res.status(404).json({ success: false, message: 'Return record not found' });
     }
 
-    // Check if return is already paid
     if (returnRecord.status === 'paid') {
       return res.status(400).json({ success: false, message: 'Return already paid' });
     }
 
-    // Find ROI record
     const roi = await Roi.findOne({ investmentId: investment._id, userId: user._id });
     if (!roi) {
       return res.status(404).json({ success: false, message: 'ROI record not found' });
     }
 
-    // Update return record
     returnRecord.status = 'paid';
     returnRecord.paidAt = new Date();
     await returnRecord.save();
 
-    // Update ROI payment tracking
     const returnAmount = returnRecord.amount;
     roi.totalRoiPaid += returnAmount;
     roi.payoutsMade += 1;
     roi.lastPayoutDate = new Date();
     await roi.save();
 
-    // Update investment payouts
     investment.payoutsMade += 1;
     if (investment.payoutsMade >= investment.totalPayouts) {
       investment.status = 'completed';
@@ -332,7 +304,6 @@ const withdrawRoi = async (req, res) => {
     investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption, new Date());
     await investment.save();
 
-    // Create payment record
     const paymentRecord = new MemberPayment({
       payment_reference: `ROI-${user._id}-${Date.now()}`,
       userId: user._id,
@@ -344,23 +315,28 @@ const withdrawRoi = async (req, res) => {
         phone: user.phone || 'N/A'
       },
       status: 'success',
-      paymentMethod: paymentMethod,
+      paymentMethod: user.roiPayoutMethod,
       paymentType: 'roi',
       investmentId: investment._id
     });
 
     await paymentRecord.save();
 
-    // Generate receipt
     const receiptData = {
       payment_id: paymentRecord.payment_reference,
       pay_currency: 'AED',
       price_amount: returnAmount,
       payment_status: 'success',
-      payment_method: paymentMethod.toUpperCase(),
+      payment_method: user.roiPayoutMethod.toUpperCase(),
       updated_at: new Date(),
       customer_email: user.email,
-      order_description: `ROI Payout for ${investment.planId.name}`
+      order_description: `ROI Payout for ${investment.planId.name}`,
+      payout_details:
+        user.roiPayoutMethod === 'bank'
+          ? `Bank: ${user.bankDetails.bankName}, Account: ${user.bankDetails.accountNumber}, Holder: ${user.bankDetails.accountHolderName}`
+          : user.roiPayoutMethod === 'crypto'
+          ? `Wallet: ${user.cryptoDetails.walletAddress}, Coin: ${user.cryptoDetails.coinType}`
+          : 'Cash payout at office'
     };
 
     await generateAndSendReceipt(receiptData, user.email, user.name, {
@@ -369,10 +345,10 @@ const withdrawRoi = async (req, res) => {
       alternateContact: user.alternateContact,
       passportNumber: user.passportNumber,
       addressLine1: user.street || '-',
-      addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
+      addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`,
+      payoutDetails: receiptData.payout_details
     });
 
-    // Send email notification to user
     const mailOptions = {
       from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
       to: user.email,
@@ -382,10 +358,17 @@ const withdrawRoi = async (req, res) => {
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.6;">
           <p>Dear ${user.name},</p>
           <p>Your ROI withdrawal of ${returnAmount} AED for investment in ${investment.planId.name} has been processed successfully.</p>
-          <p>Payment Method: ${paymentMethod.toUpperCase()}</p>
+          <p>Payment Method: ${user.roiPayoutMethod.toUpperCase()}</p>
+          <p>Payout Details: ${
+            user.roiPayoutMethod === 'bank'
+              ? `Bank: ${user.bankDetails.bankName}, Account: ${user.bankDetails.accountNumber}, Holder: ${user.bankDetails.accountHolderName}`
+              : user.roiPayoutMethod === 'crypto'
+              ? `Wallet: ${user.cryptoDetails.walletAddress}, Coin: ${user.cryptoDetails.coinType}`
+              : 'Cash payout at office'
+          }</p>
           <p>Transaction Reference: ${paymentRecord.payment_reference}</p>
           <p>Next Payout Date: ${investment.nextPayoutDate.toLocaleDateString()}</p>
-          <p>Please check your account for the funds. If you have any questions, contact support at support@primebond.com.</p>
+          <p>Please check your account for the funds or visit our office for cash payout. If you have any questions, contact support at support@primebond.com.</p>
         </div>
       `,
       headers: {
@@ -409,7 +392,13 @@ const withdrawRoi = async (req, res) => {
         paymentId: paymentRecord._id,
         returnId: returnRecord._id,
         amount: returnAmount,
-        paymentMethod,
+        paymentMethod: user.roiPayoutMethod,
+        payoutDetails:
+          user.roiPayoutMethod === 'bank'
+            ? user.bankDetails
+            : user.roiPayoutMethod === 'crypto'
+            ? user.cryptoDetails
+            : 'Cash payout at office',
         nextPayoutDate: investment.nextPayoutDate
       }
     });
@@ -421,7 +410,6 @@ const withdrawRoi = async (req, res) => {
 
 const getDashboardStats = async (req, res) => {
   try {
-    // Portfolio Performance
     const totalDeposits = await MemberPayment.aggregate([
       { $match: { paymentType: { $in: ['registration', 'investment'] }, status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
@@ -440,7 +428,6 @@ const getDashboardStats = async (req, res) => {
       ? (investments.filter(i => i.payoutsMade >= i.totalPayouts).length / investments.length * 100).toFixed(2) 
       : 0;
 
-    // Growth Rates (simplified, based on last month's data)
     const lastMonth = new Date();
     lastMonth.setMonth(lastMonth.getMonth() - 1);
     const prevMonthDeposits = await MemberPayment.aggregate([
@@ -461,19 +448,16 @@ const getDashboardStats = async (req, res) => {
       ? (((totalRoiPaid - (await Return.aggregate([{ $match: { paidAt: { $lt: lastMonth }, status: 'paid' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]).then(result => result[0]?.total || 0))) / totalRoiPaid) * 100).toFixed(2) 
       : 0;
 
-    // Technical Support (KYC approved users)
     const totalUsers = await authDB.countDocuments();
     const approvedKyc = await Kyc.countDocuments({ status: 'approved' });
     const techSupportPercentage = totalUsers > 0 ? (approvedKyc / totalUsers * 100).toFixed(2) : 0;
     const kycSince2018 = await Kyc.find({ createdAt: { $gte: new Date('2018-01-01') } }).countDocuments();
     const kycGrowthSince2018 = totalUsers > 0 ? (((approvedKyc - kycSince2018) / kycSince2018) * 100).toFixed(2) : 0;
 
-    // Sales Progress
     const totalOrders = await MemberPayment.countDocuments({ status: 'success' });
     const lastYearOrders = await MemberPayment.countDocuments({ createdAt: { $gte: new Date(new Date().getFullYear() - 1, 0, 1) }, status: 'success' });
     const yoyGrowth = lastYearOrders > 0 ? (((totalOrders - lastYearOrders) / lastYearOrders) * 100).toFixed(2) : 0;
 
-    // Financial Breakdown
     const lastMonthSales = await MemberPayment.aggregate([
       { $match: { createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1), $lt: new Date() }, status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
@@ -486,9 +470,8 @@ const getDashboardStats = async (req, res) => {
       { $match: { createdAt: { $gte: new Date(new Date().getFullYear() - 1, 0, 1) }, status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).then(result => result[0]?.total || 0);
-    const totalRevenue = salesIncome + totalRoiPaid; // Simplified revenue calculation
+    const totalRevenue = salesIncome + totalRoiPaid;
 
-    // Response
     res.json({
       success: true,
       stats: {

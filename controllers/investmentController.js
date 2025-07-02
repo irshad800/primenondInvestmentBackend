@@ -37,8 +37,10 @@ const getUserReturns = async (req, res) => {
       return res.status(403).json({ Success: false, Message: 'Access denied' });
     }
 
-    const returns = await Return.find({ userId }).populate('investmentId');
-    res.json({ Success: true, returns });
+const returns = await Return.find({ userId })
+  .populate('userId', 'name email userId')
+  .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade');
+      res.json({ Success: true, returns });
   } catch (error) {
     console.error('❌ Get Returns Error:', error);
     res.status(500).json({ Success: false, Message: 'Internal Server Error' });

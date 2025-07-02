@@ -1,3 +1,4 @@
+// authController.js
 const authDB = require('../models/auth_schema');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -6,6 +7,8 @@ const { sendVerificationEmail, generateVerificationToken, sendPasswordResetEmail
 const cloudinary = require('../config/cloudinary');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const register = async (req, res) => {
   try {
@@ -36,12 +39,11 @@ const register = async (req, res) => {
     let passportCopy = null;
 
     if (req.file) {
-    const result = await cloudinary.uploader.upload(req.file.path, {
-  folder: 'primebond/passports',
-  type: 'authenticated', // ✅ makes file private
-  resource_type: 'auto'
-});
-
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        folder: 'primebond/passports',
+        type: 'authenticated',
+        resource_type: 'auto'
+      });
       passportCopy = result.public_id;
     }
 
@@ -125,9 +127,6 @@ const login = async (req, res) => {
   }
 };
 
-const { OAuth2Client } = require('google-auth-library');
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
 const googleLogin = async (req, res) => {
   try {
     const { token } = req.body;
@@ -174,9 +173,6 @@ const googleLogin = async (req, res) => {
   }
 };
 
-//google - register
-
-
 const googleRegister = async (req, res) => {
   try {
     const {
@@ -204,7 +200,7 @@ const googleRegister = async (req, res) => {
 
     const user = new authDB({
       username,
-      password: await bcrypt.hash(crypto.randomBytes(10).toString('hex'), 12), // random
+      password: await bcrypt.hash(crypto.randomBytes(10).toString('hex'), 12),
       name,
       email: email.toLowerCase(),
       phone: phone || null,
@@ -217,7 +213,7 @@ const googleRegister = async (req, res) => {
       city: city || null,
       state: state || null,
       postalCode: postalCode || null,
-      verified: true, // ✅ skip verification
+      verified: true,
       paymentStatus: 'unpaid'
     });
 
@@ -241,24 +237,18 @@ const googleRegister = async (req, res) => {
   }
 };
 
-
 const verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
-    console.log('Received verification token:', token);
 
     const user = await authDB.findOne({ verificationToken: token });
-    console.log('User found:', user ? user.email : 'No user found');
-
     if (!user) {
       return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
     }
 
     user.verified = true;
     user.verificationToken = '';
-    console.log('Updating user:', { email: user.email, verified: true });
     await user.save();
-    console.log('User saved successfully');
 
     const authToken = jwt.sign(
       { _id: user._id, email: user.email },
@@ -267,7 +257,6 @@ const verifyEmail = async (req, res) => {
     );
 
     const redirectUrl = `http://127.0.0.1:5500/reset-password.html?token=${authToken}`;
-    console.log('Redirecting to:', redirectUrl);
     return res.redirect(redirectUrl);
   } catch (error) {
     console.error('❌ Error in verify-email route:', error.message);
@@ -326,8 +315,6 @@ const resetPassword = async (req, res) => {
   }
 };
 
-
-
 const getProfile = async (req, res) => {
   try {
     const user = await authDB.findById(req.user._id).select('-password -verificationToken -resetToken -resetTokenExpiry');
@@ -345,7 +332,7 @@ const getProfile = async (req, res) => {
 const updateProfile = async (req, res) => {
   try {
     const updates = req.body;
-    delete updates.password; // Don't allow password update here
+    delete updates.password;
 
     const updatedUser = await authDB.findByIdAndUpdate(req.user._id, updates, {
       new: true,
@@ -359,16 +346,85 @@ const updateProfile = async (req, res) => {
   }
 };
 
+const setRoiPayoutMethod = async (req, res) => {
+  try {
+    const { roiPayoutMethod, bankDetails, cryptoDetails } = req.body;
 
+    if (!roiPayoutMethod || !['bank', 'crypto', 'cash'].includes(roiPayoutMethod)) {
+      return res.status(400).json({ Success: false, Message: 'Invalid or missing ROI payout method' });
+    }
+
+    const user = await authDB.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
+    }
+
+    user.roiPayoutMethod = roiPayoutMethod;
+
+    if (roiPayoutMethod === 'bank') {
+      if (!bankDetails || !bankDetails.accountHolderName || !bankDetails.accountNumber || !bankDetails.bankName) {
+        return res.status(400).json({ Success: false, Message: 'Missing required bank details' });
+      }
+      user.bankDetails = {
+        accountHolderName: bankDetails.accountHolderName,
+        accountNumber: bankDetails.accountNumber,
+        bankName: bankDetails.bankName,
+        iban: bankDetails.iban || null,
+        swiftCode: bankDetails.swiftCode || null
+      };
+      user.cryptoDetails = { walletAddress: null, coinType: null };
+    } else if (roiPayoutMethod === 'crypto') {
+      if (!cryptoDetails || !cryptoDetails.walletAddress || !cryptoDetails.coinType) {
+        return res.status(400).json({ Success: false, Message: 'Missing required crypto details' });
+      }
+      user.cryptoDetails = {
+        walletAddress: cryptoDetails.walletAddress,
+        coinType: cryptoDetails.coinType
+      };
+      user.bankDetails = {
+        accountHolderName: null,
+        accountNumber: null,
+        bankName: null,
+        iban: null,
+        swiftCode: null
+      };
+    } else if (roiPayoutMethod === 'cash') {
+      user.bankDetails = {
+        accountHolderName: null,
+        accountNumber: null,
+        bankName: null,
+        iban: null,
+        swiftCode: null
+      };
+      user.cryptoDetails = { walletAddress: null, coinType: null };
+    }
+
+    await user.save();
+
+    return res.json({
+      Success: true,
+      Message: 'ROI payout method set successfully',
+      Data: {
+        roiPayoutMethod: user.roiPayoutMethod,
+        bankDetails: user.bankDetails,
+        cryptoDetails: user.cryptoDetails
+      }
+    });
+  } catch (error) {
+    console.error('❌ Set ROI Payout Method Error:', error.message);
+    return res.status(500).json({ Success: false, Message: 'Internal Server Error', Error: error.message });
+  }
+};
 
 module.exports = {
   register,
   verifyEmail,
   login,
   googleLogin,
-  googleRegister, 
+  googleRegister,
   forgotPassword,
   resetPassword,
   getProfile,
-  updateProfile
+  updateProfile,
+  setRoiPayoutMethod
 };
