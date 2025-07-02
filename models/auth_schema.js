@@ -1,3 +1,4 @@
+// auth_schema.js
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
@@ -88,7 +89,7 @@ const UserSchema = new mongoose.Schema({
   },
   lastPaymentLink: {
     type: String,
-    default: null    
+    default: null
   },
   cryptoCoin: {
     type: String,
@@ -108,22 +109,35 @@ const UserSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user'
   },
-selectedPlanId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'InvestmentPlan',
-  default: null
-},
-selectedInvestmentAmount: {
-  type: Number,
-  default: 0
-},
-
-
-selectedPlanName: {
-  type: String,
-  default: null
-},
-
+  selectedPlanId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'InvestmentPlan',
+    default: null
+  },
+  selectedInvestmentAmount: {
+    type: Number,
+    default: 0
+  },
+  selectedPlanName: {
+    type: String,
+    default: null
+  },
+  roiPayoutMethod: {
+    type: String,
+    enum: ['bank', 'crypto', 'cash', null],
+    default: null
+  },
+  bankDetails: {
+    accountHolderName: { type: String, default: null },
+    accountNumber: { type: String, default: null },
+    bankName: { type: String, default: null },
+    iban: { type: String, default: null },
+    swiftCode: { type: String, default: null }
+  },
+  cryptoDetails: {
+    walletAddress: { type: String, default: null },
+    coinType: { type: String, default: null }
+  },
   createdAt: {
     type: Date,
     default: Date.now
