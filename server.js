@@ -6,7 +6,7 @@ const path = require('path');
 
 // Load env first
 dotenv.config();
-
+const reviewRoutes = require('./routes/reviewRoutes');
 // Routes
 const authRoutes = require('./routes/authRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
@@ -14,6 +14,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const investmentRoutes = require('./routes/investmentRoutes');
 const kycRoutes = require('./routes/kyc');
 const roiRoutes = require('./routes/roiRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 // Start scheduler
 require('./jobs/returnScheduler');
 
@@ -47,7 +48,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/investment', investmentRoutes);
 app.use('/api/kyc', kycRoutes);
 app.use('/api/roi', roiRoutes);
-
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/contact', contactRoutes);
 // Basic root endpoint
 app.get('/', (req, res) => {
   res.send('🌍 PrimeWish API is running');
