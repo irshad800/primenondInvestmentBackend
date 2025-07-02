@@ -7,23 +7,28 @@
 
 
   const { ensureAuth } = require('../middleware/authMiddleware');
-  const {
-    register,
-    verifyEmail,
-    login,
-    googleLogin,
-    googleRegister, // ✅ included here
-    forgotPassword,
-    resetPassword,
-    getProfile,
-    updateProfile
-  } = require('../controllers/authController');
+ const {
+  register,
+  verifyEmail,
+  login,
+  googleLogin,
+  googleRegister,
+  forgotPassword,
+  resetPassword,
+  getProfile,
+  updateProfile,
+  setRoiPayoutMethod // ✅ ADD THIS
+} = require('../controllers/authController');
+
 
   // Register user with optional passport upload
   router.post('/register', upload.single('passportCopy'), register);
 
   // Verify email
-  router.get('/verify-email/:token', verifyEmail);
+  router.get('/verify-email/:token', 
+    
+    
+  );
 
   // Login
   router.post('/login', login);
@@ -45,6 +50,9 @@
 
   // Update Profile
   router.put('/update-profile', ensureAuth, updateProfile);
+
+
+router.post('/set-roi-payout', ensureAuth, setRoiPayoutMethod); 
 
 
   // View Passport (authenticated access only)

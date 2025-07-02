@@ -1,17 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const Roi = require('../models/Roi');
-const Investment = require('../models/Investment'); 
+const Investment = require('../models/Investment');
 const { ensureAuth } = require('../middleware/authMiddleware');
 const Return = require('../models/Return');
 
+// Get ROI data for a user with computed return earnings and payment history
 // Get ROI data for a user with computed return earnings and payment history
 router.get('/get/:userId', ensureAuth, async (req, res) => {
   try {
     const { userId } = req.params;
 
+    // Safeguard against undefined req.user
+    if (!req.user || (!req.user._id && !req.user.role)) {
+      return res.status(401).json({ success: false, error: 'Invalid or missing authentication token' });
+    }
+
     // Ensure requesting user matches or is admin
-    if (req.user._id.toString() !== userId && req.user.role !== 'admin') {
+    const userIdString = req.user._id ? req.user._id.toString() : null;
+    if (userIdString !== userId && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, error: 'Unauthorized access' });
     }
 
@@ -92,14 +99,24 @@ router.post('/set-payout/:investmentId', ensureAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: 'ROI record not found' });
     }
 
-    const returnRecord = new Return({
-      userId: investment.userId,
-      investmentId,
-      amount,
-      payoutDate: new Date(payoutDate),
-      status: 'pending'
-    });
-    await returnRecord.save();
+    // Check for an existing Return record with the same investmentId and payoutDate
+    let returnRecord = await Return.findOne({ investmentId, payoutDate: new Date(payoutDate) });
+
+    if (returnRecord) {
+      // Update existing record if it exists
+      returnRecord.amount = amount;
+      await returnRecord.save();
+    } else {
+      // Create new record if it doesn't exist
+      returnRecord = new Return({
+        userId: investment.userId,
+        investmentId,
+        amount,
+        payoutDate: new Date(payoutDate),
+        status: 'pending'
+      });
+      await returnRecord.save();
+    }
 
     res.status(200).json({
       success: true,
