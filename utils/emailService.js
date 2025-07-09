@@ -1,4 +1,5 @@
-require('dotenv').config(); // ✅ Load environment variables at the very beginning
+require('dotenv').config();
+console.log('Loaded Environment Variables:', process.env);
 
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
@@ -26,11 +27,10 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000,
   tls: {
     ciphers: 'SSLv3',
-    rejectUnauthorized: false // WARNING: Set to true in production
+    rejectUnauthorized: false // Set to true in production
   }
 });
 
-// Verify transporter configuration
 transporter.verify((error, success) => {
   if (error) {
     console.error('❌ SMTP Connection Error:', error.message);
@@ -39,13 +39,10 @@ transporter.verify((error, success) => {
   }
 });
 
-// Generate random token
 const generateVerificationToken = () => crypto.randomBytes(20).toString('hex');
 
-// Send verification email
 const sendVerificationEmail = async (email, token) => {
-  const verificationUrl = `http://localhost:5000/api/auth/verify-email/${token}`;
-
+  const verificationUrl = `${process.env.FRONTEND_URL || 'http://127.0.0.1:5502'}/verify-email.html?token=${token}`;
   const mailOptions = {
     from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
     to: email,
@@ -90,10 +87,8 @@ const sendVerificationEmail = async (email, token) => {
   }
 };
 
-// Send password reset email
 const sendPasswordResetEmail = async (email, resetToken) => {
-const resetUrl = `http://127.0.0.1:5500/reset-password.html?token=${resetToken}`;
-
+  const resetUrl = `${process.env.FRONTEND_URL || 'http://127.0.0.1:5502'}/forgotPassword.html?token=${resetToken}`;
   const mailOptions = {
     from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
     to: email,
@@ -129,11 +124,9 @@ const resetUrl = `http://127.0.0.1:5500/reset-password.html?token=${resetToken}`
   }
 };
 
-
 module.exports = {
   transporter,
   generateVerificationToken,
   sendVerificationEmail,
-  sendPasswordResetEmail // 👈 add this line
+  sendPasswordResetEmail
 };
-
