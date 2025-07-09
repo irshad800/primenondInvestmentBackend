@@ -2,7 +2,8 @@ const InvestmentPlan = require('../models/InvestmentPlan');
 const Investment = require('../models/Investment');
 const Return = require('../models/Return');
 const authDB = require('../models/auth_schema');
-const MemberPayment = require('../models/MemberPaymentSchema'); // Add this import
+const MemberPayment = require('../models/MemberPaymentSchema');
+const Kyc = require('../models/Kyc'); // Add this line
 const { calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 const getPlans = async (req, res) => {
@@ -37,10 +38,10 @@ const getUserReturns = async (req, res) => {
       return res.status(403).json({ Success: false, Message: 'Access denied' });
     }
 
-const returns = await Return.find({ userId })
-  .populate('userId', 'name email userId')
-  .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade');
-      res.json({ Success: true, returns });
+    const returns = await Return.find({ userId })
+      .populate('userId', 'name email userId')
+      .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade');
+    res.json({ Success: true, returns });
   } catch (error) {
     console.error('❌ Get Returns Error:', error);
     res.status(500).json({ Success: false, Message: 'Internal Server Error' });
@@ -90,7 +91,7 @@ const createInvestmentPlan = async (req, res) => {
 const selectPlan = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { planId, amount, payoutOption } = req.body; // Get payoutOption from user input
+    const { planId, amount, payoutOption } = req.body;
 
     if (!planId) {
       return res.status(400).json({ Success: false, Message: 'Plan ID is required' });
@@ -112,13 +113,25 @@ const selectPlan = async (req, res) => {
       });
     }
 
-    const user = await authDB.findById(userId);
+    const user = await authDB.findById(userId).lean();
     if (!user) {
       return res.status(404).json({ Success: false, Message: 'User not found' });
     }
 
+    // Check registration payment status
     if (user.paymentStatus !== 'success') {
       return res.status(403).json({ Success: false, Message: 'Complete registration payment first' });
+    }
+
+    // Check KYC approval
+    const kyc = await Kyc.findOne({ userId });
+    if (!kyc || kyc.status !== 'approved') {
+      return res.status(403).json({ Success: false, Message: 'KYC must be approved before selecting a plan' });
+    }
+
+    // Check payout details
+    if (!user.roiPayoutMethod || !user.bankDetails || Object.values(user.bankDetails).every(val => val === null)) {
+      return res.status(403).json({ Success: false, Message: 'Please set your ROI payout method and details first' });
     }
 
     // Check if user already has an active investment
@@ -141,28 +154,25 @@ const selectPlan = async (req, res) => {
 
     user.selectedPlanId = planId;
     user.selectedInvestmentAmount = Number(amount);
-    user.selectedPlanName = plan.name; // ✅ Add plan name
-    await user.save();
+    user.selectedPlanName = plan.name;
+    await authDB.findByIdAndUpdate(userId, user, { new: true });
 
     // Create or update a pending investment
     let investment = await Investment.findOne({ userId, status: 'pending' });
 
     if (investment) {
-      // Update existing pending investment
       investment.planId = planId;
       investment.amount = amount;
-      investment.nextPayoutDate = null; // ❌ Don't set it here
       investment.payoutOption = ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly';
       investment.totalPayouts = plan.durationMonths;
       investment.updatedAt = new Date();
       await investment.save();
     } else {
-      // Create new investment if none exists
       investment = new Investment({
         userId,
         planId,
         amount,
-        payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly', // ✅ Add this line
+        payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly',
         totalPayouts: plan.durationMonths,
         status: 'pending',
         createdAt: new Date()
@@ -182,4 +192,38 @@ const selectPlan = async (req, res) => {
   }
 };
 
-module.exports = { getPlans, getUserInvestments, getUserReturns, createInvestmentPlan, selectPlan };
+
+
+const getUserStatus = async (req, res) => {
+  try {
+    const user = await authDB.findById(req.user._id).lean();
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
+    }
+
+    return res.json({
+      Success: true,
+      user: {
+        paymentStatus: user.paymentStatus,
+        kycStatus: user.kycApproved ? 'approved' : 'pending',
+        roiPayoutMethod: user.roiPayoutMethod || null,
+        bankDetails: user.bankDetails || {}
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching user status:', error.message);
+    res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+  }
+};
+
+
+
+
+module.exports = {
+  getPlans,
+  getUserInvestments,
+  getUserReturns,
+  createInvestmentPlan,
+  selectPlan,
+  getUserStatus // ✅ Add this!
+};

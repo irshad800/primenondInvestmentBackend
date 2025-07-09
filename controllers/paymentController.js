@@ -110,7 +110,7 @@ const payRegister = async (req, res) => {
       });
     }
 
-    const user = await authDB.findById(userMongoId);
+    const user = await authDB.findById(userMongoId).select('+kycApproved');
     if (!user) {
       console.error(`🔍 User Not Found: ID ${userMongoId}`);
       return res.status(404).json({ 
@@ -127,7 +127,15 @@ const payRegister = async (req, res) => {
       });
     }
 
-    const fixedAmount = 50.0; // Registration amount fixed at 50 AED
+    if (user.isPartiallyRegistered) {
+  return res.status(403).json({
+    success: false,
+    message: 'Complete profile registration before payment.'
+  });
+}
+
+
+    const fixedAmount = 10.0; // Registration amount fixed at 50 AED
     const method = req.body.method?.trim().toLowerCase();
     const paymentCurrency = 'AED'; // Using AED for UAE
 
@@ -202,7 +210,7 @@ const payRegister = async (req, res) => {
         const paymentReference = `REG-${user._id}-${Date.now()}`;
         const ccavenueParams = {
           merchant_id: process.env.CCAVENUE_MERCHANT_ID,
-          order_id: `REG-${user._id}-${Date.now()}`,
+          order_id: paymentReference,
           currency: 'AED',
           amount: fixedAmount.toFixed(2),
           redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
@@ -219,7 +227,7 @@ const payRegister = async (req, res) => {
           payment_option: method === 'card' ? 'CC' : 'WALLET'
         };
 
-        const requestData = formatCCAvenueOrderRequest(ccavenueParams);
+        const requestData = formatCCAvenueRequest(ccavenueParams);
         const encRequest = encryptCCAvenue(requestData, process.env.CCAVENUE_WORKING_KEY);
         
         if (!encRequest) {
@@ -307,7 +315,7 @@ const payInvestment = async (req, res) => {
       });
     }
 
-    const user = await authDB.findById(userMongoId);
+    const user = await authDB.findById(userMongoId).select('+kycApproved');
     if (!user) {
       return res.status(404).json({ 
         success: false,
@@ -331,7 +339,6 @@ const payInvestment = async (req, res) => {
       });
     }
 
-    // Check if user has a successful investment payment
     const successfulInvestmentPayment = await MemberPayment.findOne({ userId: userMongoId, paymentType: 'investment', status: 'success' });
     if (successfulInvestmentPayment) {
       return res.status(400).json({ 
@@ -415,7 +422,7 @@ const payInvestment = async (req, res) => {
         const ccavenueParams = {
           merchant_id: process.env.CCAVENUE_MERCHANT_ID,
           access_code: process.env.CCAVENUE_ACCESS_CODE,
-          order_id: `INV-${user._id}-${Date.now()}`,
+          order_id: paymentReference,
           currency: 'AED',
           amount: amount.toFixed(2),
           redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
@@ -540,7 +547,6 @@ const callback = async (req, res) => {
           investment.updatedAt = new Date();
           await investment.save();
 
-          // Create ROI and Return records for investment
           try {
             const plan = await InvestmentPlan.findById(investment.planId);
             if (!plan) {
@@ -548,7 +554,6 @@ const callback = async (req, res) => {
               throw new Error('Plan not found');
             }
 
-            // Create ROI record using InvestmentPlan.returnRate
             const returnRate = plan.returnRate;
             const investmentAmount = investment.amount;
             const payoutOption = investment.payoutOption || 'monthly';
@@ -574,9 +579,6 @@ const callback = async (req, res) => {
 
             console.log(`📊 ROI saved: Rate = ${returnRate}%, Monthly = ${monthlyReturnAmount}, Annual = ${annualReturnAmount}`);
 
-            console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
-
-            // Create initial Return record
             const returnAmount = calculateReturnAmount(investment.amount, plan.returnRate);
             const nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
             await Return.create({
@@ -587,16 +589,15 @@ const callback = async (req, res) => {
               status: 'pending'
             });
             console.log(`💰 Return scheduled: $${returnAmount} for ${investment.payoutOption} payout`);
+
+            user.selectedPlanId = '685274fe90dc45ccb6268f32'; // Hardcoded as requested
+            user.selectedInvestmentAmount = 30000; // Hardcoded as requested
+            user.selectedPlanName = 'Prime Bond Investment – Tier 5'; // Hardcoded as requested
+            await user.save();
+            console.log(`📝 Updated auth_schema for user ${user._id} with selectedPlanId: 685274fe90dc45ccb6268f32, selectedInvestmentAmount: 30000, selectedPlanName: Prime Bond Investment – Tier 5`);
           } catch (error) {
             console.error('❌ ROI/Return Assignment Error:', error.message);
           }
-
-          // Update auth_schema with specific plan details after successful investment payment
-          user.selectedPlanId = '685274fe90dc45ccb6268f32'; // Hardcoded as requested
-          user.selectedInvestmentAmount = 30000; // Hardcoded as requested
-          user.selectedPlanName = 'Prime Bond Investment – Tier 5'; // Hardcoded as requested
-          await user.save();
-          console.log(`📝 Updated auth_schema for user ${user._id} with selectedPlanId: 685274fe90dc45ccb6268f32, selectedInvestmentAmount: 30000, selectedPlanName: Prime Bond Investment – Tier 5`);
         }
       }
 

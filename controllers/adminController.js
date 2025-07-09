@@ -1,4 +1,3 @@
-// adminController.js
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
@@ -11,9 +10,13 @@ const { transporter } = require('../utils/emailService');
 const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
 const crypto = require('crypto');
 
+// Helper function to get current date-time with timezone
+const getCurrentDateTime = () => new Date().toLocaleString('en-US', { timeZone: 'Asia/Dubai', hour12: true });
+
 const confirmPayment = async (req, res) => {
   try {
     const { identifier, paymentType, paymentMethod, adminPassword, investmentId } = req.body;
+    const currentTime = getCurrentDateTime();
 
     const admin = [
       process.env.ADMIN1_PASSWORD,
@@ -21,10 +24,12 @@ const confirmPayment = async (req, res) => {
     ].includes(adminPassword);
 
     if (!admin) {
+      console.error(`❌ [${currentTime}] Invalid admin password attempt`);
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
     if (!identifier || !paymentType || !paymentMethod) {
+      console.error(`❌ [${currentTime}] Missing required fields: identifier=${identifier}, paymentType=${paymentType}, paymentMethod=${paymentMethod}`);
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
@@ -38,6 +43,7 @@ const confirmPayment = async (req, res) => {
     });
 
     if (!user) {
+      console.error(`❌ [${currentTime}] User not found for identifier: ${identifier}`);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
@@ -56,8 +62,10 @@ const confirmPayment = async (req, res) => {
     if (!payment) {
       const completedPayment = await MemberPayment.findOne({ userId: user._id, paymentType, investmentId, status: 'success' });
       if (completedPayment) {
+        console.error(`❌ [${currentTime}] Payment already confirmed: userId=${user._id}, paymentType=${paymentType}, investmentId=${investmentId}`);
         return res.status(400).json({ success: false, message: 'Payment already confirmed' });
       }
+      console.error(`❌ [${currentTime}] No pending payment found: userId=${user._id}, paymentType=${paymentType}, investmentId=${investmentId}`);
       return res.status(404).json({ success: false, message: 'No pending payment found' });
     }
 
@@ -68,6 +76,7 @@ const confirmPayment = async (req, res) => {
 
     payment.status = 'success';
     await payment.save();
+    console.log(`✅ [${currentTime}] Payment confirmed: paymentId=${payment._id}, userId=${user._id}, type=${paymentType}`);
 
     if (!user.userId) {
       user.userId = await generateNextUserId();
@@ -75,22 +84,25 @@ const confirmPayment = async (req, res) => {
     user.paymentStatus = 'success';
     user.paymentMethod = paymentMethod;
     await user.save();
+    console.log(`✅ [${currentTime}] User updated: userId=${user._id}, paymentStatus=success, paymentMethod=${paymentMethod}`);
 
     let orderDescription = 'Prime Bond Registration';
     if (paymentType === 'investment' && investmentId) {
       const investment = await Investment.findById(investmentId);
       if (!investment) {
+        console.error(`❌ [${currentTime}] Investment not found: investmentId=${investmentId}`);
         return res.status(404).json({ success: false, message: 'Investment not found' });
       }
       investment.status = 'active';
       investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
       investment.updatedAt = new Date();
       await investment.save();
+      console.log(`✅ [${currentTime}] Investment activated: investmentId=${investmentId}, nextPayoutDate=${investment.nextPayoutDate}`);
 
       try {
         const plan = await InvestmentPlan.findById(investment.planId);
         if (!plan) {
-          console.error('❌ Plan not found for investment:', investment._id);
+          console.error(`❌ [${currentTime}] Plan not found for investment: investmentId=${investment._id}`);
           throw new Error('Plan not found');
         }
 
@@ -99,7 +111,7 @@ const confirmPayment = async (req, res) => {
           { returnRate: plan.returnRate, updatedAt: new Date() },
           { upsert: true, new: true }
         );
-        console.log(`📈 ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
+        console.log(`📈 [${currentTime}] ROI assigned: ${plan.returnRate}% for investment ${investment._id}`);
 
         const returnAmount = calculateReturnAmount(investment.amount, plan.returnRate);
         const nextPayoutDate = calculateNextPayoutDate(investment.payoutOption);
@@ -110,9 +122,9 @@ const confirmPayment = async (req, res) => {
           payoutDate: nextPayoutDate,
           status: 'pending'
         });
-        console.log(`💰 Return scheduled: ${returnAmount} for ${investment.payoutOption} payout`);
+        console.log(`💰 [${currentTime}] Return scheduled: amount=${returnAmount}, payoutDate=${nextPayoutDate}, investmentId=${investment._id}`);
       } catch (error) {
-        console.error('❌ ROI/Return Assignment Error:', error.message);
+        console.error(`❌ [${currentTime}] ROI/Return Assignment Error: investmentId=${investmentId}, error=${error.message}`);
       }
 
       const plan = await InvestmentPlan.findById(investment.planId);
@@ -138,10 +150,11 @@ const confirmPayment = async (req, res) => {
       addressLine1: user.street || '-',
       addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
     });
+    console.log(`✅ [${currentTime}] Receipt sent: userEmail=${user.email}, paymentId=${payment.payment_reference}`);
 
     res.json({ success: true, message: `${paymentType} payment confirmed successfully` });
   } catch (error) {
-    console.error('❌ Confirm Payment Error:', error);
+    console.error(`❌ [${getCurrentDateTime()}] Confirm Payment Error: ${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
@@ -149,6 +162,12 @@ const confirmPayment = async (req, res) => {
 const updateKycStatus = async (req, res) => {
   try {
     const { kycId, status, adminPassword, message } = req.body;
+    const currentTime = getCurrentDateTime();
+
+    if (!kycId || !status || !['approved', 'rejected', 'pending'].includes(status)) {
+      console.error(`❌ [${currentTime}] Invalid KYC ID or status: kycId=${kycId}, status=${status}`);
+      return res.status(400).json({ success: false, message: 'Invalid KYC ID or status' });
+    }
 
     const admin = [
       process.env.ADMIN1_PASSWORD,
@@ -156,22 +175,62 @@ const updateKycStatus = async (req, res) => {
     ].includes(adminPassword);
 
     if (!admin) {
+      console.error(`❌ [${currentTime}] Invalid admin password attempt`);
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
-    if (!kycId || !status || !['approved', 'rejected', 'pending'].includes(status)) {
-      return res.status(400).json({ success: false, message: 'Invalid KYC ID or status' });
-    }
-
-    const kyc = await Kyc.findById(kycId).populate('userId', 'email name');
+    const kyc = await Kyc.findById(kycId).populate('userId', 'email name _id kycApproved');
     if (!kyc) {
+      console.error(`❌ [${currentTime}] KYC record not found: kycId=${kycId}`);
       return res.status(404).json({ success: false, message: 'KYC record not found' });
     }
 
+    const adminMessage = (typeof message === 'string' && message.trim().length > 0)
+      ? message.trim()
+      : `Your KYC submission has been ${status} on ${new Date().toISOString()}. Please contact support if you have any questions.`;
+
     kyc.status = status;
+    kyc.adminMessage = adminMessage;
+
+    console.log(`📌 [${currentTime}] Incoming admin message:`, message);
+    console.log(`📌 [${currentTime}] Final admin message to save:`, adminMessage);
+
     await kyc.save();
+    console.log(`✅ [${currentTime}] KYC saved: kycId=${kycId}, status=${status}, userId=${kyc.userId._id}`);
+
+    // Validate and update kycApproved
+    const userId = kyc.userId._id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      console.error(`❌ [${currentTime}] Invalid userId format: ${userId}`);
+      return res.status(500).json({ success: false, message: 'Invalid user ID' });
+    }
+
+    // Check if the user exists before updating
+    const existingUser = await authDB.findById(userId).select('kycApproved');
+    if (!existingUser) {
+      console.error(`❌ [${currentTime}] User not found in auth collection: userId=${userId}`);
+      return res.status(404).json({ success: false, message: 'User not found in auth collection' });
+    }
+    console.log(`📌 [${currentTime}] Current user state before update: kycApproved=${existingUser.kycApproved}, userId=${userId}`);
+
+    const updateData = { kycApproved: status === 'approved' };
+    const updateResult = await authDB.findByIdAndUpdate(
+      userId,
+      { $set: updateData },
+      { new: true, runValidators: true, upsert: false }
+    );
+
+    if (!updateResult) {
+      console.error(`❌ [${currentTime}] Failed to update kycApproved for userId: ${userId}`);
+      // Fetch again to confirm state
+      const currentUser = await authDB.findById(userId).select('kycApproved');
+      console.error(`❌ [${currentTime}] Current user state after failed update: kycApproved=${currentUser ? currentUser.kycApproved : 'User not found'}, userId=${userId}`);
+    } else {
+      console.log(`✅ [${currentTime}] Updated kycApproved to ${updateData.kycApproved} for userId: ${userId}, newDoc=${JSON.stringify(updateResult)}`);
+    }
 
     const capitalizedStatus = status.charAt(0).toUpperCase() + status.slice(1);
+
     const mailOptions = {
       from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
       to: kyc.userId.email,
@@ -181,7 +240,7 @@ const updateKycStatus = async (req, res) => {
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.6;">
           <p>Dear ${kyc.userId.name},</p>
           <p>Your KYC submission has been ${status}.</p>
-          <p>Message from admin: ${message || `Your KYC submission has been ${status}. Please contact support if you have any questions.`}</p>
+          <p>Message from admin: ${adminMessage}</p>
           <p>If you have any questions, please contact our support team at support@primebond.com.</p>
         </div>
       `,
@@ -194,9 +253,9 @@ const updateKycStatus = async (req, res) => {
 
     try {
       const info = await transporter.sendMail(mailOptions);
-      console.log(`✅ KYC status email sent to ${kyc.userId.email}. Message ID: ${info.messageId}`);
+      console.log(`✅ [${currentTime}] KYC status email sent: ${info.messageId}`);
     } catch (err) {
-      console.error('❌ Failed to send KYC status email:', err.message);
+      console.error(`❌ [${currentTime}] Email sending failed: ${err.message}`);
     }
 
     res.json({
@@ -205,39 +264,47 @@ const updateKycStatus = async (req, res) => {
       data: kyc
     });
   } catch (error) {
-    console.error('❌ KYC Status Update Error:', error);
+    console.error(`❌ [${getCurrentDateTime()}] KYC Status Update Error: ${error.message}`, error.stack);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
-
 const getAllInvestments = async (req, res) => {
   try {
+    const currentTime = getCurrentDateTime();
     const investments = await Investment.find().populate('userId', 'name email userId').populate('planId');
+    console.log(`✅ [${currentTime}] Fetched all investments: count=${investments.length}`);
     res.json({ success: true, investments });
   } catch (error) {
-    console.error('❌ Admin Get All Investments Error:', error);
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Admin Get All Investments Error: ${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
 
 const getAllRois = async (req, res) => {
   try {
+    const currentTime = getCurrentDateTime();
     const rois = await Roi.find().populate('userId', 'name email userId').populate('investmentId');
+    console.log(`✅ [${currentTime}] Fetched all ROIs: count=${rois.length}`);
     res.json({ success: true, rois });
   } catch (error) {
-    console.error('❌ Admin Get All ROI Error:', error);
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Admin Get All ROI Error: ${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
 
 const getAllReturns = async (req, res) => {
   try {
+    const currentTime = getCurrentDateTime();
     const returns = await Return.find()
-      .populate('userId', 'name email userId') // Populate specific user fields
-      .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade'); // Populate specific investment fields
+      .populate('userId', 'name email userId')
+      .populate('investmentId', 'amount planId status payoutOption totalPayouts payoutsMade');
+    console.log(`✅ [${currentTime}] Fetched all returns: count=${returns.length}`);
     res.json({ success: true, returns });
   } catch (error) {
-    console.error('❌ Admin Get All Returns Error:', error);
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Admin Get All Returns Error: ${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
@@ -245,6 +312,7 @@ const getAllReturns = async (req, res) => {
 const withdrawRoi = async (req, res) => {
   try {
     const { userId, investmentId, returnId, adminPassword } = req.body;
+    const currentTime = getCurrentDateTime();
 
     const admin = [
       process.env.ADMIN1_PASSWORD,
@@ -252,68 +320,76 @@ const withdrawRoi = async (req, res) => {
     ].includes(adminPassword);
 
     if (!admin) {
+      console.error(`❌ [${currentTime}] Invalid admin password for withdrawRoi: ${adminPassword}`);
       return res.status(401).json({ success: false, message: 'Invalid admin password' });
     }
 
     if (!userId || !investmentId || !returnId) {
+      console.error(`❌ [${currentTime}] Missing required fields: userId=${userId}, investmentId=${investmentId}, returnId=${returnId}`);
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
     const user = await authDB.findById(userId);
     if (!user) {
+      console.error(`❌ [${currentTime}] User not found: userId=${userId}`);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     if (!user.roiPayoutMethod) {
+      console.error(`❌ [${currentTime}] User has no ROI payout method: userId=${userId}`);
       return res.status(400).json({ success: false, message: 'User has not set an ROI payout method' });
     }
 
     const investment = await Investment.findById(investmentId).populate('planId');
     if (!investment) {
+      console.error(`❌ [${currentTime}] Investment not found: investmentId=${investmentId}`);
       return res.status(404).json({ success: false, message: 'Investment not found' });
     }
 
     const returnRecord = await Return.findById(returnId);
     if (!returnRecord) {
+      console.error(`❌ [${currentTime}] Return record not found: returnId=${returnId}`);
       return res.status(404).json({ success: false, message: 'Return record not found' });
     }
 
     if (returnRecord.status === 'paid') {
+      console.error(`❌ [${currentTime}] Return already paid: returnId=${returnId}`);
       return res.status(400).json({ success: false, message: 'Return already paid' });
     }
 
     const roi = await Roi.findOne({ investmentId: investment._id, userId: user._id });
     if (!roi) {
+      console.error(`❌ [${currentTime}] ROI record not found for userId=${userId}, investmentId=${investmentId}`);
       return res.status(404).json({ success: false, message: 'ROI record not found' });
     }
 
     returnRecord.status = 'paid';
     returnRecord.paidAt = new Date();
     await returnRecord.save();
+    console.log(`✅ [${currentTime}] Return marked as paid: returnId=${returnId}, paidAt=${returnRecord.paidAt}`);
 
     const returnAmount = returnRecord.amount;
     roi.totalRoiPaid += returnAmount;
     roi.payoutsMade += 1;
     roi.lastPayoutDate = new Date();
     await roi.save();
+    console.log(`✅ [${currentTime}] ROI updated: totalRoiPaid=${roi.totalRoiPaid}, payoutsMade=${roi.payoutsMade}, lastPayoutDate=${roi.lastPayoutDate}`);
 
     investment.payoutsMade += 1;
     if (investment.payoutsMade >= investment.totalPayouts) {
       investment.status = 'completed';
+      console.log(`✅ [${currentTime}] Investment completed: investmentId=${investmentId}, payoutsMade=${investment.payoutsMade}, totalPayouts=${investment.totalPayouts}`);
     }
     investment.nextPayoutDate = calculateNextPayoutDate(investment.payoutOption, new Date());
     await investment.save();
+    console.log(`✅ [${currentTime}] Investment updated: investmentId=${investmentId}, payoutsMade=${investment.payoutsMade}, nextPayoutDate=${investment.nextPayoutDate}`);
 
     const paymentRecord = new MemberPayment({
       payment_reference: `ROI-${user._id}-${Date.now()}`,
       userId: user._id,
       amount: returnAmount,
       currency: 'AED',
-      customer: {
-        name: user.name,
-        email: user.email,
-        phone: user.phone || 'N/A'
-      },
+      customer: { name: user.name, email: user.email, phone: user.phone || 'N/A' },
       status: 'success',
       paymentMethod: user.roiPayoutMethod,
       paymentType: 'roi',
@@ -321,6 +397,7 @@ const withdrawRoi = async (req, res) => {
     });
 
     await paymentRecord.save();
+    console.log(`✅ [${currentTime}] Payment record created: paymentId=${paymentRecord._id}, amount=${returnAmount}`);
 
     const receiptData = {
       payment_id: paymentRecord.payment_reference,
@@ -331,12 +408,11 @@ const withdrawRoi = async (req, res) => {
       updated_at: new Date(),
       customer_email: user.email,
       order_description: `ROI Payout for ${investment.planId.name}`,
-      payout_details:
-        user.roiPayoutMethod === 'bank'
-          ? `Bank: ${user.bankDetails.bankName}, Account: ${user.bankDetails.accountNumber}, Holder: ${user.bankDetails.accountHolderName}`
-          : user.roiPayoutMethod === 'crypto'
-          ? `Wallet: ${user.cryptoDetails.walletAddress}, Coin: ${user.cryptoDetails.coinType}`
-          : 'Cash payout at office'
+      payout_details: user.roiPayoutMethod === 'bank'
+        ? `Bank: ${user.bankDetails.bankName}, Account: ${user.bankDetails.accountNumber}, Holder: ${user.bankDetails.accountHolderName}`
+        : user.roiPayoutMethod === 'crypto'
+        ? `Wallet: ${user.cryptoDetails.walletAddress}, Coin: ${user.cryptoDetails.coinType}`
+        : 'Cash payout at office'
     };
 
     await generateAndSendReceipt(receiptData, user.email, user.name, {
@@ -371,18 +447,15 @@ const withdrawRoi = async (req, res) => {
           <p>Please check your account for the funds or visit our office for cash payout. If you have any questions, contact support at support@primebond.com.</p>
         </div>
       `,
-      headers: {
-        'X-Entity-Ref-ID': crypto.randomUUID(),
-        'Precedence': 'bulk'
-      },
+      headers: { 'X-Entity-Ref-ID': crypto.randomUUID(), 'Precedence': 'bulk' },
       priority: 'normal'
     };
 
     try {
       const info = await transporter.sendMail(mailOptions);
-      console.log(`✅ ROI withdrawal email sent to ${user.email}. Message ID: ${info.messageId}`);
+      console.log(`✅ [${currentTime}] ROI withdrawal email sent to ${user.email}. Message ID: ${info.messageId}`);
     } catch (err) {
-      console.error('❌ Failed to send ROI withdrawal email:', err.message);
+      console.error(`❌ [${currentTime}] Failed to send ROI withdrawal email: ${err.message}`);
     }
 
     res.json({
@@ -393,23 +466,24 @@ const withdrawRoi = async (req, res) => {
         returnId: returnRecord._id,
         amount: returnAmount,
         paymentMethod: user.roiPayoutMethod,
-        payoutDetails:
-          user.roiPayoutMethod === 'bank'
-            ? user.bankDetails
-            : user.roiPayoutMethod === 'crypto'
-            ? user.cryptoDetails
-            : 'Cash payout at office',
+        payoutDetails: user.roiPayoutMethod === 'bank'
+          ? user.bankDetails
+          : user.roiPayoutMethod === 'crypto'
+          ? user.cryptoDetails
+          : 'Cash payout at office',
         nextPayoutDate: investment.nextPayoutDate
       }
     });
   } catch (error) {
-    console.error('❌ ROI Withdrawal Error:', error);
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] ROI Withdrawal Error: userId=${req.body.userId}, investmentId=${req.body.investmentId}, returnId=${req.body.returnId}, error=${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
   }
 };
 
 const getDashboardStats = async (req, res) => {
   try {
+    const currentTime = getCurrentDateTime();
     const totalDeposits = await MemberPayment.aggregate([
       { $match: { paymentType: { $in: ['registration', 'investment'] }, status: 'success' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
@@ -472,6 +546,7 @@ const getDashboardStats = async (req, res) => {
     ]).then(result => result[0]?.total || 0);
     const totalRevenue = salesIncome + totalRoiPaid;
 
+    console.log(`✅ [${currentTime}] Dashboard stats generated: totalDeposits=${totalDeposits}, totalInvested=${totalInvested}, totalRoiPaid=${totalRoiPaid}`);
     res.json({
       success: true,
       stats: {
@@ -491,7 +566,8 @@ const getDashboardStats = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Dashboard Stats Error:', error);
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Dashboard Stats Error: ${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
