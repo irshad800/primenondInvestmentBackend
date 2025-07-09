@@ -17,7 +17,8 @@ const kycSchema = new mongoose.Schema({
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
+  adminMessage: { type: String, default: '' }, // Ensure default is set
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('Kyc', kycSchema);  
+module.exports = mongoose.model('Kyc', kycSchema);
