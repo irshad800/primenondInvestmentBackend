@@ -22,9 +22,10 @@ const app = express();
 
 // CORS Configuration
 app.use(cors({
-  origin: ['http://127.0.0.1:5500', 'https://www.primewish.ae'],
+  origin: ['http://127.0.0.1:5500', 'http://127.0.0.1:5502', 'https://www.primewish.ae'],
   credentials: true
 }));
+
 
 // Body parser
 app.use(express.json());
