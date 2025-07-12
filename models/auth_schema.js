@@ -69,6 +69,10 @@
       type: String,
       default: ''
     },
+    verificationTokenExpiry: {
+  type: Date,
+  default: null
+},
     verified: {
       type: Boolean,
       default: false
