@@ -22,7 +22,7 @@ const app = express();
 
 // CORS Configuration
 app.use(cors({
-  origin: ['http://127.0.0.1:5500', 'http://127.0.0.1:5502', 'https://www.primewish.ae'],
+  origin: ['http://127.0.0.1:5500', 'http://127.0.0.1:5502', 'https://www.primewish.ae','https://primewish.ae', 'https://primewish.ae/prime-Bond-Investment'],
   credentials: true
 }));
 
@@ -43,6 +43,8 @@ mongoose.connect(process.env.MONGO_URI, {
 .catch((err) => console.error('❌ MongoDB connection error:', err));
 
 // API Routes
+app.use(express.urlencoded({ extended: true })); // ✅ This is mandatory
+
 app.use('/api/auth', authRoutes);
 app.use('/api/pay', paymentRoutes.router); // If paymentRoutes exports { router }
 app.use('/api/admin', adminRoutes);
