@@ -1,3 +1,4 @@
+const mongoose = require('mongoose'); // Add this line
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
@@ -222,7 +223,6 @@ const updateKycStatus = async (req, res) => {
 
     if (!updateResult) {
       console.error(`❌ [${currentTime}] Failed to update kycApproved for userId: ${userId}`);
-      // Fetch again to confirm state
       const currentUser = await authDB.findById(userId).select('kycApproved');
       console.error(`❌ [${currentTime}] Current user state after failed update: kycApproved=${currentUser ? currentUser.kycApproved : 'User not found'}, userId=${userId}`);
     } else {
@@ -230,6 +230,11 @@ const updateKycStatus = async (req, res) => {
     }
 
     const capitalizedStatus = status.charAt(0).toUpperCase() + status.slice(1);
+
+    // Add payment link for approved KYC with fallback and debugging
+    const baseUrl = process.env.BASE_URL || 'https://primewish.ae/prime-Bond-Investment'; // Fallback URL
+    const paymentLink = status === 'approved' ? `https://primewish.ae/prime-Bond-Investment/payment.html` : ''; // Fixed URL
+    console.log(`📌 [${currentTime}] Payment link generated: status=${status}, paymentLink=${paymentLink}, baseUrl=${baseUrl}`);
 
     const mailOptions = {
       from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
@@ -241,7 +246,10 @@ const updateKycStatus = async (req, res) => {
           <p>Dear ${kyc.userId.name},</p>
           <p>Your KYC submission has been ${status}.</p>
           <p>Message from admin: ${adminMessage}</p>
-          <p>If you have any questions, please contact our support team at support@primebond.com.</p>
+          ${paymentLink ? `
+            <p>You can now proceed with your investment payment. <a href="${paymentLink}" style="color: #2B6CB0; font-weight: bold; text-decoration: underline;">Click here to make your payment</a>.</p>
+          ` : ''}
+          <p>If you have any questions, please contact our support team at <a href="mailto:support@primebond.com">support@primebond.com</a>.</p>
         </div>
       `,
       headers: {
@@ -252,8 +260,8 @@ const updateKycStatus = async (req, res) => {
     };
 
     try {
-      const info = await transporter.sendMail(mailOptions);
-      console.log(`✅ [${currentTime}] KYC status email sent: ${info.messageId}`);
+      const info = await transporter.sendMail(mailOptions); 
+      console.log(`✅ [${currentTime}] KYC status email sent: ${info.messageId}, emailContent=${mailOptions.html}`);
     } catch (err) {
       console.error(`❌ [${currentTime}] Email sending failed: ${err.message}`);
     }

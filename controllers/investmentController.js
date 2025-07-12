@@ -195,26 +195,30 @@ const selectPlan = async (req, res) => {
 
 
 const getUserStatus = async (req, res) => {
-  try {
-    const user = await authDB.findById(req.user._id).lean();
-    if (!user) {
-      return res.status(404).json({ Success: false, Message: 'User not found' });
-    }
+    try {
+        const user = await authDB.findById(req.user._id).lean();
+        if (!user) {
+            return res.status(404).json({ Success: false, Message: 'User not found' });
+        }
 
-    return res.json({
-      Success: true,
-      user: {
-        paymentStatus: user.paymentStatus,
-        kycStatus: user.kycApproved ? 'approved' : 'pending',
-        roiPayoutMethod: user.roiPayoutMethod || null,
-        bankDetails: user.bankDetails || {}
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error fetching user status:', error.message);
-    res.status(500).json({ Success: false, Message: 'Internal Server Error' });
-  }
+        return res.json({
+            Success: true,
+            user: {
+                paymentStatus: user.paymentStatus,
+                kycStatus: user.kycApproved ? 'approved' : 'pending',
+                roiPayoutMethod: user.roiPayoutMethod || null,
+                bankDetails: user.bankDetails || {},
+                isPartiallyRegistered: user.isPartiallyRegistered // Add this field
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error fetching user status:', error.message);
+        res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+    }
 };
+
+
+
 
 
 

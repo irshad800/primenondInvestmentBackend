@@ -18,11 +18,13 @@ const register = async (req, res) => {
       country, street, unit, city, state, postalCode
     } = req.body;
 
+    // Step 1: Validate required fields
     if (!username || !password || !name || !email) {
       return res.status(400).json({ Success: false, Message: 'Missing required fields' });
     }
 
-    const query = { $or: [{ username }, { email }] };
+    // Step 2: Check if username, email, or phone already exists
+    const query = { $or: [{ username }, { email: email.toLowerCase().trim() }] };
     if (phone) query.$or.push({ phone });
 
     const existingUser = await authDB.findOne(query);
@@ -30,14 +32,16 @@ const register = async (req, res) => {
       return res.status(400).json({
         Success: false,
         Message: existingUser.email === email ? 'Email already in use' :
-                existingUser.username === username ? 'Username already taken' :
-                'Phone number already in use'
+                 existingUser.username === username ? 'Username already taken' :
+                 'Phone number already in use'
       });
     }
 
+    // Step 3: Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
-    let passportCopy = null;
 
+    // Step 4: Handle passport file upload (if exists)
+    let passportCopy = null;
     if (req.file) {
       const result = await cloudinary.uploader.upload(req.file.path, {
         folder: 'primebond/passports',
@@ -47,14 +51,22 @@ const register = async (req, res) => {
       passportCopy = result.public_id;
     }
 
+    // Step 5: Generate verification token
     const verificationToken = generateVerificationToken();
-    const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+    const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
+    console.log('🛠 Generated Token:', verificationToken);
+    console.log('🛠 Generated Expiry:', verificationTokenExpiry);
+
+    // Step 6: Determine if registration is complete
+    const isCompleteRegistration = passportNumber && dob && phone && country && street;
+
+    // Step 7: Create user object
     const newUser = new authDB({
       username,
       password: hashedPassword,
       name,
-      email: email.trim().toLowerCase(),
+      email: email.toLowerCase().trim(),
       phone: phone || null,
       passportNumber: passportNumber || null,
       alternateContact: alternateContact || null,
@@ -70,17 +82,47 @@ const register = async (req, res) => {
       verified: false,
       paymentStatus: 'unpaid',
       passportCopy,
-      isPartiallyRegistered: true,
+      isPartiallyRegistered: !isCompleteRegistration, // Set to false if all required fields are provided
       kycApproved: false
     });
 
+    // Step 8: Save user and verify save
     await newUser.save();
-    await sendVerificationEmail(email.trim().toLowerCase(), verificationToken);
+    console.log('✅ User saved to DB');
 
+    // Step 9: Double-check token and expiry saved in DB
+    const savedUser = await authDB.findOne({ email: email.toLowerCase().trim() });
+    if (!savedUser) {
+      console.error('❌ Failed to find user after save');
+      return res.status(500).json({ Success: false, Message: 'Failed to save user' });
+    }
+    console.log('📦 Token in DB:', savedUser.verificationToken);
+    console.log('📦 Expiry in DB:', savedUser.verificationTokenExpiry);
+    console.log('📦 isPartiallyRegistered in DB:', savedUser.isPartiallyRegistered);
+
+    if (savedUser.verificationToken !== verificationToken || !savedUser.verificationTokenExpiry) {
+      console.error('❌ Token or expiry not saved correctly:', {
+        savedToken: savedUser.verificationToken,
+        savedExpiry: savedUser.verificationTokenExpiry
+      });
+      return res.status(500).json({ Success: false, Message: 'Failed to save verification details' });
+    }
+
+    // Step 10: Send verification email
+    await sendVerificationEmail(email.toLowerCase().trim(), verificationToken);
+    console.log('📨 Email sent with token:', verificationToken);
+
+    // Step 11: Respond
     return res.json({
       Success: true,
-      Message: 'Registration successful. Please verify your email.'
+      Message: 'Registration successful. Please verify your email.',
+      User: {
+        isPartiallyRegistered: savedUser.isPartiallyRegistered,
+        kycApproved: savedUser.kycApproved,
+        paymentStatus: savedUser.paymentStatus
+      }
     });
+
   } catch (error) {
     console.error('❌ FULL ERROR:', error);
     return res.status(500).json({
@@ -300,10 +342,30 @@ const googleRegister = async (req, res) => {
 
 const verifyEmail = async (req, res) => {
   try {
-    const { token } = req.params;
+    let token = req.params.token;
+    if (!token) return res.status(400).json({ Success: false, Message: 'Token missing' });
 
-    const user = await authDB.findOne({ verificationToken: token, verificationTokenExpiry: { $gt: Date.now() } });
+    token = decodeURIComponent(token.trim());
+
+    console.log('🔍 Verifying token:', token);
+
+    const user = await authDB.findOne({
+      verificationToken: token,
+      verificationTokenExpiry: { $gt: Date.now() }
+    });
+
     if (!user) {
+      const debug = await authDB.findOne({ verificationToken: token });
+      if (debug) {
+        console.log('⚠️ Token found but expired or invalid. Details:', {
+          expiry: debug.verificationTokenExpiry,
+          currentTime: new Date(),
+          verifiedStatus: debug.verified
+        });
+      } else {
+        console.log('❌ Token not found in database');
+      }
+
       return res.status(400).json({ Success: false, Message: 'Invalid or expired token' });
     }
 
@@ -328,6 +390,7 @@ const verifyEmail = async (req, res) => {
     });
   }
 };
+
 
 const forgotPassword = async (req, res) => {
   try {
