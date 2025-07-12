@@ -42,7 +42,7 @@ transporter.verify((error, success) => {
 const generateVerificationToken = () => crypto.randomBytes(20).toString('hex');
 
 const sendVerificationEmail = async (email, token) => {
-  const verificationUrl = `${process.env.FRONTEND_URL || 'http://127.0.0.1:5502'}/verify-email.html?token=${token}`;
+  const verificationUrl = `${process.env.FRONTEND_URL || 'https://primewish.ae/prime-Bond-Investment'}/verify-email.html?token=${token}`;
   const mailOptions = {
     from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
     to: email,
@@ -88,7 +88,7 @@ const sendVerificationEmail = async (email, token) => {
 };
 
 const sendPasswordResetEmail = async (email, resetToken) => {
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://127.0.0.1:5502'}/forgotPassword.html?token=${resetToken}`;
+  const resetUrl = `${process.env.FRONTEND_URL || 'https://primewish.ae/prime-Bond-Investment'}/forgotPassword.html?token=${resetToken}`;
   const mailOptions = {
     from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
     to: email,
