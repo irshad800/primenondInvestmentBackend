@@ -1,3 +1,5 @@
+const express = require('express');
+const router = express.Router();
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
@@ -6,7 +8,7 @@ const Roi = require('../models/Roi');
 const Return = require('../models/Return');
 const crypto = require('crypto');
 const qs = require('querystring');
-const { generateAndSendReceipt, generateNextUserId } = require('../utils/paymentUtils'); // Changed from ../routes/paymentRoutes
+const { generateAndSendReceipt, generateNextUserId } = require('../utils/paymentUtils');
 const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 /**
@@ -76,7 +78,6 @@ function validateWorkingKey(key) {
  * Payment Controller Functions
  */
 
-// Process registration payment
 const payRegister = async (req, res) => {
     try {
         const userMongoId = req.user?._id;
@@ -97,7 +98,6 @@ const payRegister = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Complete profile registration before payment.' });
         }
 
-        // Generate and assign userId if not present
         if (!user.userId) {
             const newUserId = await generateNextUserId();
             await authDB.findByIdAndUpdate(userMongoId, { userId: newUserId }, { new: true });
@@ -116,7 +116,7 @@ const payRegister = async (req, res) => {
         const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
         if (!validMethods.includes(method)) {
             return res.status(400).json({ success: false, error: `Invalid payment method: ${method}` });
-        }
+        }   
 
         if (['bank', 'cash'].includes(method)) {
             await authDB.updateOne(
@@ -231,7 +231,7 @@ const payRegister = async (req, res) => {
         return res.status(500).json({ success: false, error: 'Failed to process payment', details: error.message });
     }
 };
-// Process investment payment
+
 const payInvestment = async (req, res) => {
     try {
         const userMongoId = req.user?._id;
@@ -344,73 +344,71 @@ const payInvestment = async (req, res) => {
             });
         }
 
-    if (['card', 'walletcrypto'].includes(paymentMethod)) {
-    validateCCAvenueEnv();
+        if (['card', 'walletcrypto'].includes(paymentMethod)) {
+            validateCCAvenueEnv();
 
-    try {
-        const paymentReference = `INV-${Date.now()}`;
-        const ccavenueParams = {
-            merchant_id: process.env.CCAVENUE_MERCHANT_ID,
-            order_id: paymentReference,
-            currency: 'AED',
-            amount: amount.toFixed(2),
-            redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
-            cancel_url: `${process.env.CCA_CANCEL_URL}`,
-            billing_name: user.name || 'Customer',
-            billing_email: user.email,
-            billing_tel: user.phone || '0000000000',
-            billing_address: user.street || 'Not Provided',
-            billing_city: user.city || 'Dubai',
-            billing_state: user.state || 'Dubai',
-            billing_zip: user.postalCode || '00000',
-            billing_country: user.country || 'UAE',
-            delivery_name: user.name || 'Customer',
-            delivery_address: user.street || 'Not Provided',
-            delivery_city: user.city || 'Dubai',
-            delivery_state: user.state || 'Dubai',
-            delivery_zip: user.postalCode || '00000',
-            delivery_country: user.country || 'UAE',
-            language: 'EN',
-            integration_type: 'iframe_normal'
-        };
+            try {
+                const paymentReference = `INV-${Date.now()}`;
+                const ccavenueParams = {
+                    merchant_id: process.env.CCAVENUE_MERCHANT_ID,
+                    order_id: paymentReference,
+                    currency: 'AED',
+                    amount: amount.toFixed(2),
+                    redirect_url: `${process.env.BASE_URL}/api/pay/callback`,
+                    cancel_url: `${process.env.CCA_CANCEL_URL}`,
+                    billing_name: user.name || 'Customer',
+                    billing_email: user.email,
+                    billing_tel: user.phone || '0000000000',
+                    billing_address: user.street || 'Not Provided',
+                    billing_city: user.city || 'Dubai',
+                    billing_state: user.state || 'Dubai',
+                    billing_zip: user.postalCode || '00000',
+                    billing_country: user.country || 'UAE',
+                    delivery_name: user.name || 'Customer',
+                    delivery_address: user.street || 'Not Provided',
+                    delivery_city: user.city || 'Dubai',
+                    delivery_state: user.state || 'Dubai',
+                    delivery_zip: user.postalCode || '00000',
+                    delivery_country: user.country || 'UAE',
+                    language: 'EN',
+                    integration_type: 'iframe_normal'
+                };
 
-        const requestData = formatCCAvenueRequest(ccavenueParams);
-        const encRequest = encrypt(requestData, process.env.CCAVENUE_WORKING_KEY);
+                const requestData = formatCCAvenueRequest(ccavenueParams);
+                const encRequest = encrypt(requestData, process.env.CCAVENUE_WORKING_KEY);
 
-        await investment.save();
+                await investment.save();
 
-        const paymentRecord = new MemberPayment({
-            payment_reference: paymentReference,
-            userId: user._id,
-            amount: amount,
-            currency: 'AED',
-            customer: {
-                name: user.name,
-                email: user.email,
-                phone: user.phone || 'N/A'
-            },
-            status: 'pending',
-            paymentMethod: paymentMethod,
-            paymentType: 'investment',
-            investmentId: investment._id
-        });
+                const paymentRecord = new MemberPayment({
+                    payment_reference: paymentReference,
+                    userId: user._id,
+                    amount: amount,
+                    currency: 'AED',
+                    customer: {
+                        name: user.name,
+                        email: user.email,
+                        phone: user.phone || 'N/A'
+                    },
+                    status: 'pending',
+                    paymentMethod: paymentMethod,
+                    paymentType: 'investment',
+                    investmentId: investment._id
+                });
 
-        await paymentRecord.save();
+                await paymentRecord.save();
 
-        const iframeSrc = `https://secure.ccavenue.ae/transaction/transaction.do?command=initiateTransaction&merchant_id=${process.env.CCAVENUE_MERCHANT_ID}&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
+                const iframeSrc = `https://secure.ccavenue.ae/transaction/transaction.do?command=initiateTransaction&merchant_id=${process.env.CCAVENUE_MERCHANT_ID}&encRequest=${encRequest}&access_code=${process.env.CCAVENUE_ACCESS_CODE}`;
 
-        return res.json({ success: true, url: iframeSrc });
-
-    } catch (error) {
-        console.error('❌ CCAvenue Payment Error:', error);
-        return res.status(500).json({
-            success: false,
-            error: `Payment initiation failed`,
-            details: error.message
-        });
-    }
-}
-
+                return res.json({ success: true, url: iframeSrc });
+            } catch (error) {
+                console.error('❌ CCAvenue Payment Error:', error);
+                return res.status(500).json({
+                    success: false,
+                    error: `Payment initiation failed`,
+                    details: error.message
+                });
+            }
+        }
     } catch (error) {
         console.error('❌ Investment Payment Error:', error);
         return res.status(500).json({ 
@@ -442,21 +440,25 @@ const callback = async (req, res) => {
         console.log('Decrypted response:', decryptedResponse);
 
         const responseData = qs.parse(decryptedResponse);
-        console.log('Parsed response:', JSON.stringify(responseData, null, 2));
+        console.log('🔍 Full CCAvenue response fields:');
+        for (const key in responseData) {
+            console.log(`${key}: ${responseData[key]}`);
+        }
+
+        console.log('Parsed response with order_status:', responseData.order_status);
 
         const status = (responseData.order_status || '').toLowerCase();
         const orderId = responseData.order_id || 'unknown';
         const trackingId = responseData.tracking_id || 'none';
-        const message = responseData.failure_message || 'No failure message provided';
+        const message = responseData.failure_message || responseData.status_message || 'No detailed failure message provided';
 
-        console.log('Order status:', status, 'Message:', message);
+        console.log('Order status:', status, 'Message:', message, 'Order ID:', orderId);
 
-        // Process the payment and update the database
         await processPaymentAsync(responseData);
 
         if (status === 'success') {
             return res.redirect(
-                `${process.env.FRONTEND_URL}/payment-success.html` +
+                `http://127.0.0.1:5502/payment-success.html` +
                 `?order_id=${orderId}` +
                 `&tracking_id=${trackingId}`
             );
@@ -475,7 +477,6 @@ const callback = async (req, res) => {
     }
 };
 
-// Handle payment processing separately
 async function processPaymentAsync(responseData) {
     try {
         const { order_id, order_status, tracking_id } = responseData;
@@ -501,6 +502,7 @@ async function processPaymentAsync(responseData) {
         if (payment.paymentType === 'registration') {
             await authDB.findByIdAndUpdate(payment.userId, {
                 paymentStatus: order_status === 'Success' ? 'success' : 'pending',
+                transactionId: tracking_id,
                 updatedAt: new Date()
             });
             console.log('Updated authDB for user:', payment.userId);
@@ -508,23 +510,133 @@ async function processPaymentAsync(responseData) {
 
         if (payment.paymentType === 'investment' && order_status === 'Success') {
             await Investment.findByIdAndUpdate(payment.investmentId, {
-                status: 'success',
+                status: 'active',
                 updatedAt: new Date()
             });
-            console.log('Updated Investment for investmentId:', payment.investmentId);
-        }
 
-        if (order_status === 'Success') {
+            await authDB.findByIdAndUpdate(payment.userId, {
+                transactionId: tracking_id,
+                updatedAt: new Date()
+            });
+            console.log('Updated Investment and authDB for investmentId:', payment.investmentId);
+
+            const investment = await Investment.findById(payment.investmentId).populate('planId');
+            if (!investment || !investment.planId) {
+                console.error('Investment or planId not found for investmentId:', payment.investmentId, 'investment:', investment);
+                return;
+            }
+            console.log('Fetched investment with planId:', investment);
+
+            let roi = await Roi.findOne({ investmentId: payment.investmentId, userId: payment.userId });
+            const monthlyReturn = calculateReturnAmount(investment.amount, investment.planId.returnRate, 'monthly') || 0;
+            const annualReturn = calculateReturnAmount(investment.amount, investment.planId.annualReturnRate, 'annually') || 0;
+
+            console.log(`Calculated returns: monthlyReturn=${monthlyReturn}, annualReturn=${annualReturn}`);
+
+            if (!roi) {
+                roi = new Roi({
+                    userId: payment.userId,
+                    investmentId: payment.investmentId,
+                    returnRate: investment.planId.returnRate || 0,
+                    monthlyReturnAmount: monthlyReturn,
+                    annualReturnAmount: annualReturn,
+                    totalRoiPaid: 0,
+                    payoutsMade: 0,
+                    lastPayoutDate: null,
+                    assignedAt: new Date()
+                });
+                await roi.save();
+                console.log('Initialized Roi record:', roi);
+            } else {
+                roi.monthlyReturnAmount = monthlyReturn;
+                roi.annualReturnAmount = annualReturn;
+                roi.updatedAt = new Date();
+                await roi.save();
+                console.log('Updated Roi record:', roi);
+            }
+
+            const startDate = investment.startDate || new Date();
+            let payoutDate = calculateNextPayoutDate(investment.payoutOption, startDate);
+            const totalPayouts = investment.totalPayouts || investment.planId.durationMonths;
+            const returnAmount = calculateReturnAmount(
+                investment.amount,
+                investment.payoutOption === 'monthly' ? investment.planId.returnRate : investment.planId.annualReturnRate,
+                investment.payoutOption
+            ) || 0;
+
+            console.log(`Calculated returnAmount for ${investment.payoutOption} payout: ${returnAmount}`);
+
+            // Clear existing Return records to avoid duplicates
+            await Return.deleteMany({ investmentId: payment.investmentId, status: 'pending' });
+
+            for (let i = 0; i < totalPayouts; i++) {
+                const returnRecord = new Return({
+                    userId: payment.userId,
+                    investmentId: payment.investmentId,
+                    amount: returnAmount,
+                    payoutDate: payoutDate,
+                    status: 'pending'
+                });
+                await returnRecord.save();
+                console.log(`Created Return record for payoutDate: ${payoutDate}, amount: ${returnAmount}`);
+                payoutDate = calculateNextPayoutDate(investment.payoutOption, payoutDate);
+            }
+
+            await Investment.findByIdAndUpdate(payment.investmentId, {
+                nextPayoutDate: calculateNextPayoutDate(investment.payoutOption, startDate)
+            });
+
             const user = await authDB.findById(payment.userId).select('userId phone alternateContact passportNumber street city state postalCode country email name');
             if (user) {
-                console.log('User data for receipt:', user); // Debug the user object
                 const paymentData = {
                     payment_id: payment.payment_reference,
                     updated_at: payment.updatedAt,
                     price_amount: payment.amount,
                     pay_currency: payment.currency,
                     payment_status: payment.status,
-                    payment_method: payment.paymentMethod
+                    payment_method: payment.paymentMethod,
+                    paymentType: payment.paymentType,
+                    investmentDetails: {
+                        planName: investment.planId.name || 'N/A',
+                        amount: investment.amount || 0,
+                        payoutOption: investment.payoutOption || 'N/A',
+                        durationMonths: investment.totalPayouts || 0
+                    },
+                    roiDetails: {
+                        monthlyReturn: Number(roi.monthlyReturnAmount || 0).toFixed(2),
+                        annualReturn: Number(roi.annualReturnAmount || 0).toFixed(2)
+                    }
+                };
+                console.log('Payment data for receipt:', paymentData);
+                const userInfo = {
+                    userId: user.userId || "N/A",
+                    phonene: user.name || 'Customer',
+                    email: user.email || 'no-reply@example.com',
+                    phone: user.phone || '0000000000',
+                    street: user.street || 'Not Provided',
+                    city: user.city || 'Dubai',
+                    state: user.state || 'Dubai',
+                    postalCode: user.postalCode || '00000',
+                    country: user.country || 'UAE'
+                };
+                await generateAndSendReceipt(paymentData, user.email, user.name, userInfo);
+                console.log('Receipt sent for order_id:', order_id, 'with userId:', user.userId);
+            } else {
+                console.error('User not found for payment:', payment.userId);
+            }
+        }
+
+        if (order_status === 'Success' && payment.paymentType === 'registration') {
+            const user = await authDB.findById(payment.userId).select('userId phone alternateContact passportNumber street city state postalCode country email name');
+            if (user) {
+                const paymentData = {
+                    payment_id: payment.payment_reference,
+                    updated_at: payment.updatedAt,
+                    price_amount: payment.amount,
+                    pay_currency: payment.currency,
+                    payment_status: payment.status,
+                    payment_method: payment.paymentMethod,
+                    paymentType: payment.paymentType
                 };
                 const userInfo = {
                     userId: user.userId || "N/A",
@@ -534,7 +646,7 @@ async function processPaymentAsync(responseData) {
                     addressLine1: user.street || "N/A",
                     addressLine2: `${user.city || ''}, ${user.state || ''}, ${user.postalCode || ''}, ${user.country || ''}`
                 };
-                await generateAndSendReceipt(paymentData, user.email, user.name, userInfo); // Pass structured data
+                await generateAndSendReceipt(paymentData, user.email, user.name, userInfo);
                 console.log('Receipt sent for order_id:', order_id, 'with userId:', user.userId);
             } else {
                 console.error('User not found for payment:', payment.userId);
@@ -546,6 +658,7 @@ async function processPaymentAsync(responseData) {
 }
 
 module.exports = { 
+    router,
     payRegister, 
     payInvestment, 
     callback 

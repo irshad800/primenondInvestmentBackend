@@ -3,7 +3,7 @@ const Investment = require('../models/Investment');
 const Return = require('../models/Return');
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
-const Kyc = require('../models/Kyc'); // Add this line
+const Kyc = require('../models/Kyc');
 const { calculateNextPayoutDate } = require('../utils/calculateReturn');
 
 const getPlans = async (req, res) => {
@@ -113,28 +113,27 @@ const selectPlan = async (req, res) => {
       });
     }
 
+    const validPayoutOptions = ['monthly', 'annually'];
+    const selectedPayoutOption = validPayoutOptions.includes(payoutOption) ? payoutOption : 'monthly';
+
     const user = await authDB.findById(userId).lean();
     if (!user) {
       return res.status(404).json({ Success: false, Message: 'User not found' });
     }
 
-    // Check registration payment status
     if (user.paymentStatus !== 'success') {
       return res.status(403).json({ Success: false, Message: 'Complete registration payment first' });
     }
 
-    // Check KYC approval
     const kyc = await Kyc.findOne({ userId });
     if (!kyc || kyc.status !== 'approved') {
       return res.status(403).json({ Success: false, Message: 'KYC must be approved before selecting a plan' });
     }
 
-    // Check payout details
     if (!user.roiPayoutMethod || !user.bankDetails || Object.values(user.bankDetails).every(val => val === null)) {
       return res.status(403).json({ Success: false, Message: 'Please set your ROI payout method and details first' });
     }
 
-    // Check if user already has an active investment
     const activeInvestment = await Investment.findOne({ userId, status: 'active' });
     if (activeInvestment) {
       return res.status(400).json({ 
@@ -143,7 +142,6 @@ const selectPlan = async (req, res) => {
       });
     }
 
-    // Check if user has a successful investment payment
     const successfulInvestmentPayment = await MemberPayment.findOne({ userId, paymentType: 'investment', status: 'success' });
     if (successfulInvestmentPayment) {
       return res.status(400).json({ 
@@ -157,28 +155,27 @@ const selectPlan = async (req, res) => {
     user.selectedPlanName = plan.name;
     await authDB.findByIdAndUpdate(userId, user, { new: true });
 
-    // Create or update a pending investment
     let investment = await Investment.findOne({ userId, status: 'pending' });
 
     if (investment) {
       investment.planId = planId;
       investment.amount = amount;
-      investment.payoutOption = ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly';
+      investment.payoutOption = selectedPayoutOption;
       investment.totalPayouts = plan.durationMonths;
       investment.updatedAt = new Date();
-      await investment.save();
     } else {
       investment = new Investment({
         userId,
         planId,
         amount,
-        payoutOption: ['monthly', 'annually'].includes(payoutOption) ? payoutOption : 'monthly',
+        payoutOption: selectedPayoutOption,
         totalPayouts: plan.durationMonths,
         status: 'pending',
         createdAt: new Date()
       });
-      await investment.save();
     }
+    await investment.save();
+    console.log('Created/Updated investment:', investment);
 
     res.json({ 
       Success: true, 
@@ -192,36 +189,28 @@ const selectPlan = async (req, res) => {
   }
 };
 
-
-
 const getUserStatus = async (req, res) => {
-    try {
-        const user = await authDB.findById(req.user._id).lean();
-        if (!user) {
-            return res.status(404).json({ Success: false, Message: 'User not found' });
-        }
-
-        return res.json({
-            Success: true,
-            user: {
-                paymentStatus: user.paymentStatus,
-                kycStatus: user.kycApproved ? 'approved' : 'pending',
-                roiPayoutMethod: user.roiPayoutMethod || null,
-                bankDetails: user.bankDetails || {},
-                isPartiallyRegistered: user.isPartiallyRegistered // Add this field
-            }
-        });
-    } catch (error) {
-        console.error('❌ Error fetching user status:', error.message);
-        res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+  try {
+    const user = await authDB.findById(req.user._id).lean();
+    if (!user) {
+      return res.status(404).json({ Success: false, Message: 'User not found' });
     }
+
+    return res.json({
+      Success: true,
+      user: {
+        paymentStatus: user.paymentStatus,
+        kycStatus: user.kycApproved ? 'approved' : 'pending',
+        roiPayoutMethod: user.roiPayoutMethod || null,
+        bankDetails: user.bankDetails || {},
+        isPartiallyRegistered: user.isPartiallyRegistered
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching user status:', error.message);
+    res.status(500).json({ Success: false, Message: 'Internal Server Error' });
+  }
 };
-
-
-
-
-
-
 
 module.exports = {
   getPlans,
@@ -229,5 +218,5 @@ module.exports = {
   getUserReturns,
   createInvestmentPlan,
   selectPlan,
-  getUserStatus // ✅ Add this!
+  getUserStatus
 };
