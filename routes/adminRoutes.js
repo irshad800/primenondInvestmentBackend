@@ -13,8 +13,12 @@ const {
   withdrawRoi,
   getDashboardStats,
 } = require('../controllers/adminController');
-
 const { ensureAuth } = require('../middleware/authMiddleware');
+const MemberPayment = require('../models/MemberPaymentSchema');
+const Kyc = require('../models/Kyc');
+
+// Helper function to get current date-time with timezone
+const getCurrentDateTime = () => new Date().toLocaleString('en-US', { timeZone: 'Asia/Dubai', hour12: true });
 
 // Admin Login (no token required)
 router.post('/login', (req, res) => {
@@ -50,6 +54,40 @@ const adminOnly = (req, res, next) => {
   next();
 };
 
+// Get Pending Payments (Admin)
+router.get('/pending-payments', ensureAuth, adminOnly, async (req, res) => {
+  try {
+    const currentTime = getCurrentDateTime();
+    const payments = await MemberPayment.find({ status: 'pending' })
+      .populate('userId', 'name email userId')
+      .populate('investmentId', 'amount planId')
+      .sort({ createdAt: -1 });
+    console.log(`✅ [${currentTime}] Fetched pending payments: count=${payments.length}`);
+    res.json({ success: true, payments });
+  } catch (error) {
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Fetch Pending Payments Error: ${error.message}, stack=${error.stack}`);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+// Get Pending KYC Records (Admin)
+router.get('/pending-kyc', ensureAuth, adminOnly, async (req, res) => {
+  try {
+    const currentTime = getCurrentDateTime();
+    const kycRecords = await Kyc.find({ status: 'pending' })
+      .populate('userId', 'name email userId')
+      .sort({ createdAt: -1 });
+    console.log(`✅ [${currentTime}] Fetched pending KYC records: count=${kycRecords.length}`);
+    res.json({ success: true, kycRecords });
+  } catch (error) {
+    const currentTime = getCurrentDateTime();
+    console.error(`❌ [${currentTime}] Fetch Pending KYC Error: ${error.message}, stack=${error.stack}`);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+// Existing routes
 router.post('/confirm-payment', ensureAuth, adminOnly, confirmPayment);
 router.post('/kyc/update-status', ensureAuth, adminOnly, updateKycStatus);
 router.get('/all-investments', ensureAuth, adminOnly, getAllInvestments);

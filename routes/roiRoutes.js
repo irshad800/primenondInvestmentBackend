@@ -5,7 +5,7 @@ const Roi = require('../models/Roi');
 const Investment = require('../models/Investment');
 const Return = require('../models/Return');
 const { ensureAuth } = require('../middleware/authMiddleware');
-const { calculateNextPayoutDate } = require('../utils/calculateReturn');
+const { calculateNextPayoutDate, calculateReturnAmount } = require('../utils/calculateReturn');
 
 // Helper function to format dates
 const formatDate = (date) => {
@@ -25,17 +25,20 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
 
     // Validate userId format
     if (!mongoose.isValidObjectId(userId)) {
+      console.error(`Invalid user ID format: ${userId}`);
       return res.status(400).json({ success: false, error: 'Invalid user ID format' });
     }
 
     // Safeguard against undefined req.user
     if (!req.user || (!req.user._id && !req.user.role)) {
+      console.error('Missing or invalid authentication token');
       return res.status(401).json({ success: false, error: 'Invalid or missing authentication token' });
     }
 
     // Ensure requesting user matches or is admin
     const userIdString = req.user._id.toString();
     if (userIdString !== userId && req.user.role !== 'admin') {
+      console.error(`Unauthorized access: requesting user=${userIdString}, target user=${userId}`);
       return res.status(403).json({ success: false, error: 'Unauthorized access' });
     }
 
@@ -43,13 +46,16 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
     const roiData = await Roi.find({ userId })
       .populate({
         path: 'investmentId',
-        select: 'amount planId startDate status payoutOption totalPayouts payoutsMade',
-        populate: { path: 'planId', select: 'name description minAmount maxAmount' }
+        select: 'amount planId startDate status payoutOption totalPayouts payoutsMade nextPayoutDate',
+        populate: { path: 'planId', select: 'name description minAmount maxAmount returnRate annualReturnRate' }
       })
       .lean();
 
+    console.log(`Fetched ROI data for userId=${userId}:`, roiData); // Debug log
+
     // Return empty array for no data
     if (!roiData || roiData.length === 0) {
+      console.warn(`No ROI data found for userId=${userId}`);
       return res.status(200).json({ success: true, data: [] });
     }
 
@@ -57,7 +63,9 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
     const enrichedROI = await Promise.all(
       roiData.map(async (roi) => {
         const investment = roi.investmentId;
+        console.log(`Processing ROI for investmentId=${roi.investmentId?._id || 'unknown'}`); // Debug log
         if (!investment || !investment.amount) {
+          console.warn(`Investment not found or invalid for ROI: ${roi._id}`);
           return {
             ...roi,
             investmentAmount: 0,
@@ -78,14 +86,31 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
         }
 
         const amount = investment.amount;
-        const returnRate = roi.returnRate || 0;
+        const plan = investment.planId;
+        const returnRate = plan.returnRate || 0; // Monthly return rate
+        const annualReturnRate = plan.annualReturnRate || 0; // Annual return rate
         const payoutOption = investment.payoutOption || 'monthly';
         const totalPayouts = investment.totalPayouts || 0;
         const payoutsMade = investment.payoutsMade || 0;
         const remainingPayouts = totalPayouts - payoutsMade;
 
-        const monthlyReturn = (amount * returnRate) / 100;
-        const annualReturn = payoutOption === 'annually' ? monthlyReturn : monthlyReturn * 12;
+        // Calculate returns using separate rates for monthly and annual payouts
+        const monthlyReturn = calculateReturnAmount(amount, returnRate, 'monthly');
+        const annualReturn = calculateReturnAmount(amount, annualReturnRate, 'annually');
+
+        // Set computedReturn based on payoutOption
+        const computedReturn = {
+          monthly: Number(payoutOption === 'monthly' ? monthlyReturn : 0).toFixed(2),
+          annually: Number(payoutOption === 'annually' ? annualReturn : 0).toFixed(2)
+        };
+
+        // Update Roi document with calculated values
+        if (roi.monthlyReturnAmount !== monthlyReturn || roi.annualReturnAmount !== annualReturn) {
+          await Roi.updateOne(
+            { _id: roi._id },
+            { $set: { monthlyReturnAmount: monthlyReturn, annualReturnAmount: annualReturn } }
+          );
+        }
 
         // Check Return collection for next scheduled payout
         const nextReturn = await Return.findOne({
@@ -104,18 +129,17 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
           nextPayoutDate = calculateNextPayoutDate(payoutOption, investment.startDate || new Date());
         }
 
-        return {
+        const result = {
           ...roi,
           investmentAmount: amount,
           currency: 'AED',
-          planName: investment.planId?.name || 'N/A',
-          planDescription: investment.planId?.description || 'N/A',
+          planName: plan.name || 'N/A',
+          planDescription: plan.description || 'N/A',
           investmentStatus: investment.status || 'N/A',
           payoutOption,
-          computedReturn: {
-            monthly: Number(payoutOption === 'monthly' ? monthlyReturn : 0).toFixed(2),
-            annually: Number(annualReturn).toFixed(2)
-          },
+          monthlyReturnAmount: monthlyReturn,
+          annualReturnAmount: annualReturn,
+          computedReturn,
           paymentHistory: {
             totalRoiPaid: Number(roi.totalRoiPaid || 0).toFixed(2),
             payoutsMade,
@@ -124,6 +148,8 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
           },
           nextPayoutDate: formatDate(nextPayoutDate)
         };
+        console.log('Enriched ROI:', result); // Debug log
+        return result;
       })
     );
 
@@ -132,7 +158,7 @@ router.get('/get/:userId', ensureAuth, async (req, res) => {
       data: enrichedROI
     });
   } catch (error) {
-    console.error(`❌ ROI Fetch Error: userId=${req.params.userId}, error=${error.message}`);
+    console.error(`ROI Fetch Error: userId=${req.params.userId}, error=${error.message}, stack=${error.stack}`);
     res.status(500).json({ success: false, error: `Failed to fetch ROI data: ${error.message}` });
   }
 });

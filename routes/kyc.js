@@ -42,6 +42,12 @@ router.post('/kyc', auth.ensureAuth, upload.fields([
       return res.status(400).json({ success: false, error: 'Invalid file type. ID must be JPEG, PNG, or PDF; Selfie must be JPEG or PNG.' });
     }
 
+    // Ensure the uploads/kyc directory exists
+    const uploadDir = path.join(__dirname, '..', 'uploads', 'kyc');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
     const kyc = new Kyc({
       userId,
       idType,
@@ -58,6 +64,7 @@ router.post('/kyc', auth.ensureAuth, upload.fields([
     });
 
     await kyc.save();
+    console.log(`[${getCurrentDateTime()}] KYC submitted: userId=${userId}, idDocument=${kyc.idDocumentUrl}, selfie=${kyc.selfieUrl}`);
     res.status(201).json({ success: true, message: 'KYC submitted successfully. Awaiting admin approval.' });
   } catch (error) {
     console.error(`[${getCurrentDateTime()}] KYC Submission Error: ${error.message}`);
@@ -83,15 +90,17 @@ router.get('/admin/all', auth.ensureAuth, async (req, res) => {
 // 📄 Get KYC by ID (Admin)
 router.get('/admin/:kycId', auth.ensureAuth, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {  
+    if (req.user.role !== 'admin') {
       return res.status(403).json({ success: false, error: 'Access denied. Admin role required.' });
     }
-
     const kyc = await Kyc.findById(req.params.kycId).populate('userId', 'email name role');
     if (!kyc) {
       return res.status(404).json({ success: false, error: 'KYC record not found.' });
     }
-
+    // Prepend base URL to file paths
+    const baseUrl = process.env.BASE_URL || 'https://wishgroup.ae/api';
+    kyc.idDocumentUrl = kyc.idDocumentUrl ? `${baseUrl}/${kyc.idDocumentUrl}` : null;
+    kyc.selfieUrl = kyc.selfieUrl ? `${baseUrl}/${kyc.selfieUrl}` : null;
     res.json({ success: true, data: kyc });
   } catch (error) {
     console.error(`[${getCurrentDateTime()}] Fetch KYC Detail Error: ${error.message}`);
@@ -150,7 +159,7 @@ router.get('/uploads/selfie', auth.ensureAuth, async (req, res) => {
 
 // 📁 Serve KYC File (Admin Only)
 router.get('/uploads/:fileName', auth.ensureAuth, async (req, res) => {
-  console.log(`[${getCurrentDateTime()}] Hit /uploads/:fileName route, fileName: ${req.params.fileName}, user:`, req.user);
+  console.log(`[${getCurrentDateTime()}] Attempting to serve file: ${req.params.fileName}`);
   try {
     if (req.user.role !== 'admin') {
       console.log(`[${getCurrentDateTime()}] Access denied for userId: ${req.user._id}, role: ${req.user.role}`);
@@ -167,17 +176,36 @@ router.get('/uploads/:fileName', auth.ensureAuth, async (req, res) => {
       console.log(`[${getCurrentDateTime()}] No KYC record found for fileName: ${fileName}`);
       return res.status(403).json({ success: false, error: 'Access to this file is not authorized.' });
     }
-    const filePath = path.join(__dirname, '..', 'Uploads', 'kyc', fileName);
+    const filePath = path.join(__dirname, '..', 'uploads', 'kyc', fileName);
+    console.log(`[${getCurrentDateTime()}] Computed filePath: ${filePath}`);
     if (!fs.existsSync(filePath)) {
       console.log(`[${getCurrentDateTime()}] File not found: ${filePath}`);
       return res.status(404).json({ success: false, error: 'File not found' });
     }
-    console.log(`[${getCurrentDateTime()}] Serving file: ${filePath}`);
-    return res.sendFile(filePath);
+    const ext = path.extname(fileName).toLowerCase();
+    let contentType = 'application/octet-stream';
+    if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+    else if (ext === '.png') contentType = 'image/png';
+    else if (ext === '.pdf') contentType = 'application/pdf';
+    console.log(`[${getCurrentDateTime()}] Serving file: ${filePath}, contentType: ${contentType}`);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    return res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error(`[${getCurrentDateTime()}] Error sending file: ${err.message}`);
+        res.status(500).json({ success: false, error: 'Error serving file' });
+      }
+    });
   } catch (error) {
     console.error(`[${getCurrentDateTime()}] File Serve Error: ${error.message}`);
     res.status(500).json({ success: false, error: 'Internal Server Error' });
   }
 });
+
+
+
+
+
+
 
 module.exports = router;  
