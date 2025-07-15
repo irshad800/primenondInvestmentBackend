@@ -17,7 +17,7 @@ const kycSchema = new mongoose.Schema({
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
-  adminMessage: { type: String, default: '' }, // Ensure default is set
+  adminMessage: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });
 
