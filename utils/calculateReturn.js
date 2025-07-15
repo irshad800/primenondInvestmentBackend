@@ -1,9 +1,12 @@
-const calculateReturnAmount = (amount, returnRate) => {
-  if (typeof amount !== 'number' || typeof returnRate !== 'number' || amount < 0 || returnRate < 0) {
-    console.warn(`⚠️ Invalid inputs for calculateReturnAmount: amount=${amount}, returnRate=${returnRate}`);
+const calculateReturnAmount = (amount, rate, payoutOption = 'monthly') => {
+  console.log(`Calculating return: amount=${amount}, rate=${rate}, payoutOption=${payoutOption}`);
+  if (typeof amount !== 'number' || typeof rate !== 'number' || amount < 0 || rate < 0) {
+    console.warn(`⚠️ Invalid inputs for calculateReturnAmount: amount=${amount}, rate=${rate}, payoutOption=${payoutOption}`);
     return 0;
   }
-  return (amount * returnRate) / 100;
+  const result = (amount * rate) / 100;
+  console.log(`Calculated return: ${result}`);
+  return result;
 };
 
 const calculateNextPayoutDate = (payoutOption = 'monthly', currentDate = new Date()) => {
