@@ -12,7 +12,9 @@ const {
   getAllReturns,
   withdrawRoi,
   getDashboardStats,
+  calculateRoiForAll // ✅ Add this here
 } = require('../controllers/adminController');
+
 const { ensureAuth } = require('../middleware/authMiddleware');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Kyc = require('../models/Kyc');
@@ -87,6 +89,62 @@ router.get('/pending-kyc', ensureAuth, adminOnly, async (req, res) => {
   }
 });
 
+
+// In authController.js or adminController.js
+const getAllInvestors = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access only' });
+    }
+    const investors = await authDB.find()
+      .select('userId name email phone paymentStatus kycApproved createdAt')
+      .lean();
+    res.json({ success: true, investors });
+  } catch (error) {
+    console.error(`❌ Get all investors error: ${error.message}`);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+// In authRoutes.js
+router.get('/investors', ensureAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access only' });
+    }
+    const investors = await authDB.find({
+      paymentStatus: 'success' // Changed from 'completed' to 'success'
+      // Optionally remove or adjust the kycApproved filter based on requirements
+      // kycApproved: true
+    })
+      .select('userId name email phone paymentStatus kycApproved createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ success: true, investors });
+  } catch (error) {
+    console.error('❌ Get Investors Error:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+
+router.get('/all-payments', ensureAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access only' });
+    }
+    const payments = await MemberPayment.find()
+      .populate('userId', 'name email userId')
+      .select('payment_reference amount currency status paymentMethod paymentType createdAt investmentId')
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ success: true, payments });
+  } catch (error) {
+    console.error('❌ Get All Payments Error:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+
 // Existing routes
 router.post('/confirm-payment', ensureAuth, adminOnly, confirmPayment);
 router.post('/kyc/update-status', ensureAuth, adminOnly, updateKycStatus);
@@ -95,5 +153,6 @@ router.get('/all-rois', ensureAuth, adminOnly, getAllRois);
 router.get('/all-returns', ensureAuth, adminOnly, getAllReturns);
 router.post('/withdraw-roi', ensureAuth, adminOnly, withdrawRoi);
 router.get('/dashboard-stats', ensureAuth, adminOnly, getDashboardStats);
+router.get('/calculate-roi', ensureAuth, calculateRoiForAll);
 
 module.exports = router;

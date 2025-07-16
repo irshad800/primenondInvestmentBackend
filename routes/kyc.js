@@ -98,7 +98,7 @@ router.get('/admin/:kycId', auth.ensureAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: 'KYC record not found.' });
     }
     // Prepend base URL to file paths
-    const baseUrl = process.env.BASE_URL || 'https://wishgroup.ae/api';
+    const baseUrl = process.env.BASE_URL || 'https://wishholdings.co/api';
     kyc.idDocumentUrl = kyc.idDocumentUrl ? `${baseUrl}/${kyc.idDocumentUrl}` : null;
     kyc.selfieUrl = kyc.selfieUrl ? `${baseUrl}/${kyc.selfieUrl}` : null;
     res.json({ success: true, data: kyc });
@@ -208,4 +208,4 @@ router.get('/uploads/:fileName', auth.ensureAuth, async (req, res) => {
 
 
 
-module.exports = router;  
+module.exports = router;   
