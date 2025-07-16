@@ -1,4 +1,4 @@
-const mongoose = require('mongoose'); // Add this line
+const mongoose = require('mongoose');
 const authDB = require('../models/auth_schema');
 const MemberPayment = require('../models/MemberPaymentSchema');
 const Investment = require('../models/Investment');
@@ -6,7 +6,7 @@ const InvestmentPlan = require('../models/InvestmentPlan');
 const Roi = require('../models/Roi');
 const Return = require('../models/Return');
 const Kyc = require('../models/Kyc');
-const { generateAndSendReceipt, generateNextUserId } = require('../routes/paymentRoutes');
+const { generateAndSendReceipt, generateNextUserId } = require('../utils/paymentUtils'); // Corrected import
 const { transporter } = require('../utils/emailService');
 const { calculateReturnAmount, calculateNextPayoutDate } = require('../utils/calculateReturn');
 const crypto = require('crypto');
@@ -193,48 +193,33 @@ const updateKycStatus = async (req, res) => {
     kyc.status = status;
     kyc.adminMessage = adminMessage;
 
-    console.log(`📌 [${currentTime}] Incoming admin message:`, message);
-    console.log(`📌 [${currentTime}] Final admin message to save:`, adminMessage);
+    // Generate a payment token if KYC is approved
+    let paymentLink = '';
+    if (status === 'approved') {
+      const paymentToken = crypto.randomUUID();
+      kyc.paymentToken = paymentToken;
+      kyc.paymentTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // Token expires in 24 hours
+      paymentLink = `https://primewish.ae/prime-Bond-Investment/payment.html?token=${paymentToken}&userId=${kyc.userId._id}`;
+      console.log(`✅ [${currentTime}] Payment token generated: token=${paymentToken}, expires=${kyc.paymentTokenExpires}`);
+    }
 
     await kyc.save();
     console.log(`✅ [${currentTime}] KYC saved: kycId=${kycId}, status=${status}, userId=${kyc.userId._id}`);
 
-    // Validate and update kycApproved
-    const userId = kyc.userId._id;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      console.error(`❌ [${currentTime}] Invalid userId format: ${userId}`);
-      return res.status(500).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    // Check if the user exists before updating
-    const existingUser = await authDB.findById(userId).select('kycApproved');
-    if (!existingUser) {
-      console.error(`❌ [${currentTime}] User not found in auth collection: userId=${userId}`);
-      return res.status(404).json({ success: false, message: 'User not found in auth collection' });
-    }
-    console.log(`📌 [${currentTime}] Current user state before update: kycApproved=${existingUser.kycApproved}, userId=${userId}`);
-
     const updateData = { kycApproved: status === 'approved' };
     const updateResult = await authDB.findByIdAndUpdate(
-      userId,
+      kyc.userId._id,
       { $set: updateData },
       { new: true, runValidators: true, upsert: false }
     );
 
     if (!updateResult) {
-      console.error(`❌ [${currentTime}] Failed to update kycApproved for userId: ${userId}`);
-      const currentUser = await authDB.findById(userId).select('kycApproved');
-      console.error(`❌ [${currentTime}] Current user state after failed update: kycApproved=${currentUser ? currentUser.kycApproved : 'User not found'}, userId=${userId}`);
+      console.error(`❌ [${currentTime}] Failed to update kycApproved for userId: ${kyc.userId._id}`);
     } else {
-      console.log(`✅ [${currentTime}] Updated kycApproved to ${updateData.kycApproved} for userId: ${userId}, newDoc=${JSON.stringify(updateResult)}`);
+      console.log(`✅ [${currentTime}] Updated kycApproved to ${updateData.kycApproved} for userId: ${kyc.userId._id}`);
     }
 
     const capitalizedStatus = status.charAt(0).toUpperCase() + status.slice(1);
-
-    // Add payment link for approved KYC with fallback and debugging
-    const baseUrl = process.env.BASE_URL || 'https://primewish.ae/prime-Bond-Investment'; // Fallback URL
-    const paymentLink = status === 'approved' ? `https://primewish.ae/prime-Bond-Investment/payment.html` : ''; // Fixed URL
-    console.log(`📌 [${currentTime}] Payment link generated: status=${status}, paymentLink=${paymentLink}, baseUrl=${baseUrl}`);
 
     const mailOptions = {
       from: `"Prime Bond" <${process.env.EMAIL_ID}>`,
@@ -580,6 +565,42 @@ const getDashboardStats = async (req, res) => {
   }
 };
 
+
+const calculateRoiForAll = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access only' });
+    }
+    const investments = await Investment.find()
+      .populate('planId')
+      .populate('userId', 'name email userId')
+      .lean();
+    const roiData = await Promise.all(investments.map(async (investment) => {
+      const roi = await Roi.findOne({ investmentId: investment._id });
+      const returnAmount = calculateReturnAmount(
+        investment.amount,
+        investment.planId.returnRate,
+        investment.payoutOption
+      );
+      return {
+        user: investment.userId,
+        investmentId: investment._id,
+        planName: investment.planId.name,
+        amount: investment.amount,
+        returnRate: investment.planId.returnRate,
+        calculatedReturn: returnAmount,
+        totalRoiPaid: roi?.totalRoiPaid || 0,
+        lastPayoutDate: roi?.lastPayoutDate || null
+      };
+    }));
+    res.json({ success: true, roiData });
+  } catch (error) {
+    console.error(`❌ Calculate ROI error: ${error.message}`);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+
 module.exports = {
   confirmPayment,
   updateKycStatus,
@@ -587,5 +608,6 @@ module.exports = {
   getAllRois,
   getAllReturns,
   withdrawRoi,
-  getDashboardStats
+  getDashboardStats,
+  calculateRoiForAll, // ✅ Add this line
 };

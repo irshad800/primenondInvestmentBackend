@@ -116,41 +116,45 @@ const payRegister = async (req, res) => {
         const validMethods = ['bank', 'cash', 'card', 'walletcrypto'];
         if (!validMethods.includes(method)) {
             return res.status(400).json({ success: false, error: `Invalid payment method: ${method}` });
-        }   
-
-        if (['bank', 'cash'].includes(method)) {
-            await authDB.updateOne(
-                { _id: userMongoId },
-                {
-                    paymentStatus: 'pending',
-                    paymentMethod: method,
-                    transactionId: null,
-                    lastPaymentLink: null,
-                    cryptoCoin: null,
-                    updatedAt: new Date()
-                }
-            );
-
-            const paymentRecord = new MemberPayment({
-                payment_reference: `${method.toUpperCase()}-REG-${Date.now()}`,
-                userId: user._id,
-                amount: fixedAmount,
-                currency: paymentCurrency,
-                customer: { name: user.name, email: user.email, phone: user.phone || 'N/A' },
-                status: 'pending',
-                paymentMethod: method,
-                paymentType: 'registration',
-                createdAt: new Date()
-            });
-
-            await paymentRecord.save();
-            return res.json({
-                success: true,
-                message: `${method === 'bank' ? 'Bank transfer' : 'Cash'} payment recorded at ${currentTime}. Awaiting admin approval.`
-            });
         }
 
-        if (['card', 'walletcrypto'].includes(method)) {
+        // Handle bank, cash, and walletcrypto as direct processes
+if (['bank', 'cash', 'walletcrypto'].includes(method)) {
+    await authDB.updateOne(
+        { _id: userMongoId },
+        {
+            paymentStatus: 'pending',
+            paymentMethod: method,
+            transactionId: null,
+            lastPaymentLink: null,
+            cryptoCoin: method === 'walletcrypto' ? 'usdt' : null,
+            updatedAt: new Date()
+        }
+    );
+    const paymentRecord = new MemberPayment({
+        payment_reference: `${method.toUpperCase()}-REG-${Date.now()}`,
+        userId: user._id,
+        amount: fixedAmount,
+        currency: paymentCurrency,
+        customer: { name: user.name, email: user.email, phone: user.phone || 'N/A' },
+        status: 'pending',
+        paymentMethod: method,
+        paymentType: 'registration',
+        cryptoCoin: method === 'walletcrypto' ? 'USDT' : null, // Added for consistency
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+    await paymentRecord.save();
+    return res.json({
+        success: true,
+        message: `Crypto wallet payment recorded at ${currentTime}. Awaiting admin approval.`,
+        paymentId: paymentRecord._id,
+        cryptoCoin: method === 'walletcrypto' ? 'USDT' : null // Return cryptoCoin for frontend
+    });
+}
+
+        // Handle card payments via CCAvenue
+        if (method === 'card') {
             validateCCAvenueEnv();
 
             try {
@@ -202,7 +206,8 @@ const payRegister = async (req, res) => {
                     status: 'pending',
                     paymentMethod: method,
                     paymentType: 'registration',
-                    createdAt: new Date()
+                    createdAt: new Date(),
+                    updatedAt: new Date()
                 });
 
                 await paymentRecord.save();
@@ -316,35 +321,49 @@ const payInvestment = async (req, res) => {
         const investment = pendingInvestment;
         investment.updatedAt = new Date();
 
-        if (['bank', 'cash'].includes(paymentMethod)) {
-            await investment.save();
-
-            const paymentRecord = new MemberPayment({
-                payment_reference: `${paymentMethod.toUpperCase()}-INV-${Date.now()}`,
-                userId: user._id,
-                amount: amount,
-                currency: 'AED',
-                customer: {
-                    name: user.name,
-                    email: user.email,
-                    phone: user.phone || 'N/A'
-                },
-                status: 'pending',
-                paymentMethod: paymentMethod,
-                paymentType: 'investment',
-                investmentId: investment._id
-            });
-
-            await paymentRecord.save();
-            return res.json({
-                success: true,
-                message: `${paymentMethod} payment recorded`,
-                paymentId: paymentRecord._id,
-                investmentId: investment._id
-            });
+        // Handle bank, cash, and walletcrypto as direct processes
+  if (['bank', 'cash', 'walletcrypto'].includes(paymentMethod)) {
+    await investment.save();
+    await authDB.updateOne(
+        { _id: userMongoId },
+        {
+            paymentMethod: paymentMethod,
+            transactionId: null,
+            lastPaymentLink: null,
+            cryptoCoin: paymentMethod === 'walletcrypto' ? 'usdt' : null, // Set default for walletcrypto
+            updatedAt: new Date()
         }
+    );
+    const paymentRecord = new MemberPayment({
+        payment_reference: `${paymentMethod.toUpperCase()}-INV-${Date.now()}`,
+        userId: user._id,
+        amount: amount,
+        currency: 'AED',
+        customer: {
+            name: user.name,
+            email: user.email,
+            phone: user.phone || 'N/A'
+        },
+        status: 'pending',
+        paymentMethod: paymentMethod,
+        paymentType: 'investment',
+        investmentId: investment._id,
+        cryptoCoin: paymentMethod === 'walletcrypto' ? 'USDT' : null, // Set default for walletcrypto
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+    await paymentRecord.save();
+    return res.json({
+        success: true,
+        message: `${paymentMethod === 'bank' ? 'Bank transfer' : paymentMethod === 'cash' ? 'Cash' : 'Crypto wallet'} payment recorded. Awaiting admin approval.`,
+        paymentId: paymentRecord._id,
+        investmentId: investment._id,
+        cryptoCoin: paymentMethod === 'walletcrypto' ? 'USDT' : null // Return for frontend
+    });
+}
 
-        if (['card', 'walletcrypto'].includes(paymentMethod)) {
+        // Handle card payments via CCAvenue
+        if (paymentMethod === 'card') {
             validateCCAvenueEnv();
 
             try {
@@ -392,7 +411,9 @@ const payInvestment = async (req, res) => {
                     status: 'pending',
                     paymentMethod: paymentMethod,
                     paymentType: 'investment',
-                    investmentId: investment._id
+                    investmentId: investment._id,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
                 });
 
                 await paymentRecord.save();
@@ -458,7 +479,7 @@ const callback = async (req, res) => {
 
         if (status === 'success') {
             return res.redirect(
-                `http://127.0.0.1:5502/payment-success.html` +
+                `https://primewish.ae/prime-Bond-Investment/payment-success.html` +
                 `?order_id=${orderId}` +
                 `&tracking_id=${trackingId}`
             );
